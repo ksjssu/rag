@@ -1,0 +1,16 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# 환경파일
+.env
+
+# 가상환경 디렉토리
+.venv/
+
+# 기타 불필요한 것들
+*.log
+*.sqlite3
+*.db
+dist/
+build/

@@ -1,0 +1,106 @@
+stages:
+  - lint
+  - test
+  - build-test
+  - deploy
+  - notify
+
+variables:
+  DOCKER_BUILDKIT: 1
+  UV_LINK_MODE: copy
+  UV_SYSTEM_PYTHON: 1
+  ECR_REGISTRY: 941377122044.dkr.ecr.ap-northeast-2.amazonaws.com/surrodocs
+  AWS_ACCESS_KEY_ID: $AWS_SURRODOCS_ECR_PUSH_USER_ACCESS_KEY
+  AWS_SECRET_ACCESS_KEY: $AWS_SURRODOCS_ECR_PUSH_USER_SECRET_KEY
+  AWS_DEFAULT_REGION: "ap-northeast-2"
+
+default:
+  before_script:
+    - export PROJECT_SUFFIX=$(echo "$CI_PROJECT_NAME" | awk -F'-' '{print $NF}')
+
+.base_ruff:
+  stage: lint
+  interruptible: true
+  image: ghcr.io/astral-sh/ruff:alpine
+  before_script:
+    - ruff --version
+
+Ruff Check:
+  extends: .base_ruff
+  script:
+    - ruff check --output-format=gitlab > code-quality-report.json
+  artifacts:
+    reports:
+      codequality: $CI_PROJECT_DIR/code-quality-report.json
+
+Ruff Format:
+  extends: .base_ruff
+  script:
+    - ruff format --diff
+
+test:
+  stage: test
+  image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+  before_script:
+    - uv sync
+  script:
+    - uv run pytest --maxfail=5 --disable-warnings --cov=src --cov-report=html --junitxml=report.xml || test $? -eq 5
+  artifacts:
+    paths:
+      - htmlcov/
+      - report.xml
+    reports:
+      junit: report.xml
+
+Docker build test:
+  stage: build-test
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  script:
+    - >
+      /kaniko/executor
+      --verbosity=info
+      --context $CI_PROJECT_DIR
+      --dockerfile $CI_PROJECT_DIR/Dockerfile
+      --no-push
+      --cleanup | tee kaniko-build.log
+    - cat kaniko-build.log
+  artifacts:
+    paths:
+      - kaniko-build.log
+    expire_in: 1 week
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "dev" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "stage")'
+      when: on_success
+
+Build and Deploy:
+  stage: deploy
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  script:
+    - IMAGE_NAME=$(echo "$CI_PROJECT_NAME" | awk -F'-' '{print $NF}')
+    - DEPLOY_DATE=$(TZ=Asia/Seoul date +%Y%m%d-%H%M%S)
+    - >
+      if [ "$CI_COMMIT_BRANCH" = "stage" ]; then
+        TAG="stage"-${CI_COMMIT_TAG:-$DEPLOY_DATE}
+      else
+        TAG=${CI_COMMIT_TAG:-$DEPLOY_DATE}
+      fi
+    - >
+      /kaniko/executor
+      --verbosity=error
+      --context $CI_PROJECT_DIR
+      --dockerfile $CI_PROJECT_DIR/Dockerfile
+      --destination $ECR_REGISTRY/$IMAGE_NAME:${TAG}
+      --cleanup | tee kaniko-build.log
+    - cat kaniko-build.log
+    - echo Deployed at $DEPLOY_DATE
+  artifacts:
+    paths:
+      - kaniko-build.log
+    expire_in: 1 week
+  rules:
+    - if: '$CI_COMMIT_TAG && ($CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "stage")'
+      when: on_success
