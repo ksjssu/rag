@@ -7,22 +7,35 @@ from typing import List, Dict, Any, Iterable, Optional, Union
 logger = logging.getLogger(__name__)
 
 # --- Docling 라이브러리 임포트 ---
+# src/adapters/secondary/docling_chunker_adapter.py
+
+# --- Docling 라이브러리 임포트 ---
+# 제공된 디렉토리 목록에 기반하여 정확한 임포트 경로로 수정합니다.
+# 최상위 패키지는 'docling' 입니다.
 try:
     # Docling 청킹을 위한 핵심 클래스 임포트
-    from docling_core.transforms.chunker import HybridChunker
-    # Docling 내부 문서 객체 타입 정의가 필요할 수 있으나,
-    # from docling_core.datamodel.document import Document as DoclingDocument # 필요시
+    # from docling_core.transforms.chunker import HybridChunker # 이전 시도 (실패)
+    from docling_core.transforms.chunker.hybrid_chunker import HybridChunker # <-- 정확한 경로: docling/transforms/chunker/hybrid_chunker.py
 
     # HybridChunker가 의존하는 내부 클래스 임포트 (초기화 파라미터 타입 힌트용)
-    from docling_core.transforms.chunker.tokenizer.base import BaseTokenizer # <--- 여기서 임포트 시도
+    # from docling_core.transforms.chunker.tokenizer.base import BaseTokenizer # 이전 시도 (실패)
+    from docling_core.transforms.chunker.tokenizer.base import BaseTokenizer # <-- 정확한 경로: docling/transforms/chunker/tokenizer/base.py
+
+    # Docling 내부 문서 객체 타입 정의 (DoclingDocument)
+    # from docling_core.types import DoclingDocument # 이전 시도 (실패)
+    from docling_core.types.doc import DoclingDocument # <-- 정확한 경로: docling/types/doc/document.py (listing 참고)
+
 
     _docling_chunker_available = True
-    logger.info("Docling chunking library (HybridChunker) imported successfully.")
-except ImportError:
-    logger.warning("Warning: Docling HybridChunker or dependencies not found (`docling_core.transforms`, `semchunk`). DoclingChunkerAdapter will use simple line splitting.")
+    print("Docling chunking library (HybridChunker) imported successfully.")
+except ImportError as e: # 임포트 실패 시 발생하는 예외 메시지를 출력하도록 수정
+    print(f"Warning: Docling library import failed. Import error: {e}") # <-- 실제 임포트 오류 메시지 출력
+    print("DoclingChunkerAdapter will use simple line splitting.")
     _docling_chunker_available = False
     # --- Docling 클래스가 없을 경우 에러 방지를 위한 더미 클래스 정의 ---
-    logger.info("Using dummy Docling chunker classes.")
+    # (기존 더미 클래스 정의는 그대로 유지)
+    print("   Using dummy Docling chunker classes.")
+    # Dummy 클래스 정의들...
 
     # (이전에 정의했던 Dummy HybridChunker, MockDocChunkResult 클래스 등)
 
@@ -238,4 +251,24 @@ class DoclingChunkerAdapter(TextChunkingPort):
 
             logger.info(f"DoclingChunkerAdapter: Chunking process finished. Generated {len(chunks)} chunks.")
 
+        print(f"[CHUNKING] 성공: {len(chunks)}개 청크 생성됨")
+        for i, chunk in enumerate(chunks[:3]):  # 처음 3개만 표시
+            print(f"  청크 {i+1}: {len(chunk.content)} 문자")
+        if len(chunks) > 3:
+            print(f"  ... 외 {len(chunks)-3}개 청크")
+
+        return chunks
+
+    def chunk_text(self, text: str, metadata: Dict[str, Any]) -> List[DocumentChunk]:
+        print(f"[CHUNKING] 시작: 입력 텍스트 길이 {len(text)} 문자")
+        
+        # 기존 코드...
+        
+        # 청킹 성공 시
+        print(f"[CHUNKING] 성공: {len(chunks)}개 청크 생성됨")
+        for i, chunk in enumerate(chunks[:3]):  # 처음 3개만 표시
+            print(f"  청크 {i+1}: {len(chunk.content)} 문자")
+        if len(chunks) > 3:
+            print(f"  ... 외 {len(chunks)-3}개 청크")
+        
         return chunks

@@ -4,31 +4,57 @@ import logging
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Union
+import sys
+import tempfile
+import re
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 # --- Docling 라이브러리 임포트 ---
+# src/adapters/secondary/docling_parser_adapter.py
+
+# --- Docling 라이브러리 임포트 ---
+# 제공된 디렉토리 목록에 기반하여 정확한 임포트 경로로 수정합니다.
+# 최상위 패키지는 'docling' 입니다.
 try:
     # Docling 파싱을 위한 핵심 클래스 임포트
-    from docling_core.document_converter import DocumentConverter
-    from docling_core.datamodel.base_models import DocumentStream, ConversionStatus, InputFormat
-    from docling_core.datamodel.document import ConversionResult
+    # from docling_core.document_converter import DocumentConverter # 이전 시도 (실패)
+    from docling.document_converter import DocumentConverter # <-- 정확한 경로: docling/document_converter.py
+
+    # from docling_core.datamodel.base_models import DocumentStream, ConversionStatus, InputFormat # 이전 시도 (실패)
+    from docling.datamodel.base_models import DocumentStream, ConversionStatus, InputFormat # <-- 정확한 경로: docling/datamodel/base_models.py
+
+    # from docling_core.datamodel.document import ConversionResult # 이전 시도 (실패)
+    from docling.datamodel.document import ConversionResult # <-- 정확한 경로: docling/datamodel/document.py
+
     # --- 파이프라인 옵션 임포트 ---
-    from docling_core.datamodel.pipeline_options import PipelineOptions, PdfPipelineOptions
+    # from docling_core.datamodel.pipeline_options import PipelineOptions, PdfPipelineOptions # 이전 시도 (실패)
+    from docling.datamodel.pipeline_options import PipelineOptions, PdfPipelineOptions, EasyOcrOptions, TableStructureOptions, AcceleratorOptions, TableFormerMode # <-- 정확한 경로: docling/datamodel/pipeline_options.py
+
     # 필요한 다른 Docling 모듈/클래스 임포트 (예외 클래스 등)
-    from docling_core.exceptions import ConversionError as DoclingConversionError
+    # from docling_core.exceptions import ConversionError as DoclingConversionError # 이전 시도 (실패)
+    from docling.exceptions import ConversionError as DoclingConversionError # <-- 정확한 경로: docling/exceptions.py
+
     # Docling 자체 유틸리티 함수 임포트 (InputFormat 추정 등에 사용될 수 있음)
-    # 예: from docling_core.utils.utils import guess_format_from_extension
+    # 예: from docling.utils.utils import guess_format_from_extension # <-- 정확한 경로: docling/utils/utils.py
 
     _docling_available = True
-    logger.info("Docling core libraries imported successfully.")
-
-except ImportError:
-    logger.warning("Warning: Docling core libraries not found (`docling_core`). DoclingParserAdapter will use fallback decoding.")
+    print("Docling core libraries imported successfully.")
+except ImportError as e: # 임포트 실패 시 발생하는 예외 메시지를 출력하도록 수정
+    print(f"Warning: Docling library import failed. Import error: {e}") # <-- 실제 임포트 오류 메시지 출력
+    print("DoclingParserAdapter will use fallback decoding.")
     _docling_available = False
     # --- Docling 클래스가 없을 경우 에러 방지를 위한 더미 클래스 정의 ---
-    logger.info("Using dummy Docling classes.")
+    # (이전 더미 클래스 정의는 그대로 유지되어야 합니다.)
+    print("   Using dummy Docling classes.")
+    # Dummy 클래스 정의들...
+
+
+# --- 어댑터 특정 예외 정의 ---
+# ... (ParsingError 정의) ...
+
+# ... (나머지 DoclingParserAdapter 클래스 코드 계속) ...
 
     # (Dummy DocumentConverter, Dummy DocumentStream 등 다른 더미 클래스 정의는 그대로 유지)
 
@@ -167,6 +193,8 @@ from domain.models import RawDocument, ParsedDocument # 입/출력 도메인 모
 from typing import Dict, Any, Optional, List, Union # Union 임포트
 from pathlib import Path # 파일 확장자 추출에 사용
 
+# src/adapters/secondary/docling_parser_adapter.py 파일 상단에 추가
+DOCLING_ALLOWED_FORMATS = ["pdf", "docx", "xlsx", "pptx", "jpg", "png"]
 
 class DoclingParserAdapter(DocumentParsingPort):
     """
@@ -206,10 +234,15 @@ class DoclingParserAdapter(DocumentParsingPort):
             # from docling_core.document_converter import FormatOption, PdfFormatOption # <-- 임포트 필요
             # from docling_core.datamodel.pipeline_options import PdfPipelineOptions # <-- 임포트 필요
             # 더미 클래스를 사용하여 구조만 시뮬레이션
-            class DummyFormatOption: # FormatOption 더미
-                 def __init__(self, pipeline_cls, backend, pipeline_options=None): pass
-            class DummyPdfFormatOption(DummyFormatOption): # PdfFormatOption 더미
-                 def __init__(self, pipeline_options=None): pass
+            class DummyFormatOption:
+                def __init__(self, pipeline_cls=None, backend=None, pipeline_options=None):
+                    self.pipeline_cls = pipeline_cls
+                    self.backend = backend
+                    self.pipeline_options = pipeline_options
+
+            class DummyPdfFormatOption(DummyFormatOption):
+                def __init__(self, pipeline_options=None, backend="pypdfium2"):
+                    super().__init__(pipeline_cls=None, backend=backend, pipeline_options=pipeline_options)
 
 
             if self._pdf_options:
@@ -318,7 +351,7 @@ class DoclingParserAdapter(DocumentParsingPort):
         """
         RawDocument를 Docling DocumentConverter로 파싱합니다.
         """
-        logger.info(f"DoclingParserAdapter: Starting document parsing for {raw_document.metadata.get('filename', 'unknown')}")
+        print(f"[PARSING] 시작: {raw_document.metadata.get('filename', 'unknown')}")
 
         if not raw_document.content:
             logger.warning("DoclingParserAdapter: Empty document content received")
@@ -335,16 +368,89 @@ class DoclingParserAdapter(DocumentParsingPort):
                 input_format = InputFormat.AUTODETECT
 
             logger.info(f"DoclingParserAdapter: Converting document with format {input_format}")
+
+            # 원본 파일명에서 확장자 추출 (metadata에 filename이 있다고 가정)
+            filename = raw_document.metadata.get('filename', 'unknown_file')
+            file_ext = os.path.splitext(filename)[1]  # '.pdf', '.docx' 등 확장자 추출
+
+            # 확장자가 없는 경우 content-type에서 추론
+            if not file_ext and 'content_type' in raw_document.metadata:
+                content_type = raw_document.metadata['content_type']
+                # MIME 타입별 확장자 매핑
+                mime_to_ext = {
+                    'application/pdf': '.pdf',
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+                    # 기타 MIME 타입 추가...
+                }
+                file_ext = mime_to_ext.get(content_type, '')
+
+            # 임시 파일 생성 (확장자 포함)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as temp_file:
+                temp_file.write(raw_document.content)
+                temp_path = Path(temp_file.name)
+
+            # 올바른 매개변수로 convert 호출
             result = self._converter.convert(
-                content=raw_document.content,
-                input_format=input_format,
-                metadata=raw_document.metadata
+                source=temp_path,
+                headers={"Content-Type": "application/pdf"}  # 필요한 경우
             )
 
             if result.status == ConversionStatus.SUCCESS:
                 logger.info("DoclingParserAdapter: Document conversion successful")
+                
+                # 결과에서 문서 객체 가져오기
+                doc = result.document
+                
+                # 1. 백엔드 텍스트 추출 시도
+                backend_text = ""
+                try:
+                    if hasattr(doc, 'export_to_text') and callable(doc.export_to_text):
+                        backend_text = doc.export_to_text()
+                        print(f"[PARSING] 백엔드 텍스트 추출: {len(backend_text)} 글자")
+                except Exception as e:
+                    print(f"[PARSING] 백엔드 텍스트 추출 실패: {e}")
+                
+                # 2. OCR 텍스트 추출 시도
+                ocr_text = ""
+                try:
+                    # 여러 방법으로 OCR 결과 접근 시도
+                    if hasattr(doc, 'ocr_text') and doc.ocr_text:
+                        ocr_text = doc.ocr_text
+                    elif hasattr(doc, 'export_to_markdown') and callable(doc.export_to_markdown):
+                        ocr_text = doc.export_to_markdown()
+                    
+                    if ocr_text:
+                        print(f"[PARSING] OCR 텍스트 추출: {len(ocr_text)} 글자")
+                except Exception as e:
+                    print(f"[PARSING] OCR 텍스트 추출 실패: {e}")
+                
+                # 3. 최적의 텍스트 선택
+                document_text = ""
+                
+                # 글리프 태그 확인
+                if "glyph<" in backend_text or backend_text.strip() == "":
+                    # 한글 또는 글리프 문제 - OCR 결과 사용
+                    document_text = ocr_text
+                    print("[PARSING] 글리프 감지됨: OCR 텍스트 사용")
+                else:
+                    # 일반 텍스트 PDF - 백엔드 텍스트 사용
+                    document_text = backend_text
+                    print("[PARSING] 정상 텍스트: 백엔드 텍스트 사용")
+                
+                # 텍스트 정제 (태그 제거 등)
+                document_text = re.sub(r'glyph<[^>]+>', '', document_text)
+                document_text = re.sub(r'<[^>]+>', '', document_text)
+                
+                print(f"[PARSING] 최종 추출 텍스트 길이: {len(document_text)} 글자")
+                
+                # 샘플 출력
+                if document_text:
+                    print("\n===== 추출된 텍스트 샘플 =====")
+                    print(document_text[:200] + "..." if len(document_text) > 200 else document_text)
+                    print("==============================\n")
+                
                 return ParsedDocument(
-                    content=result.document.content,
+                    content=document_text,
                     metadata=raw_document.metadata
                 )
             else:
@@ -359,3 +465,59 @@ class DoclingParserAdapter(DocumentParsingPort):
         except Exception as e:
             logger.error(f"DoclingParserAdapter: Unexpected error during parsing: {e}")
             raise ParsingError(f"Unexpected error during parsing: {e}") from e
+
+# PDF 파이프라인 옵션 설정 (DoclingParserAdapter 초기화 시)
+from docling.datamodel.pipeline_options import PdfPipelineOptions, EasyOcrOptions, TableStructureOptions, AcceleratorOptions, TableFormerMode
+
+# OCR 옵션 설정 (한글 지원)
+ocr_options = EasyOcrOptions(
+    lang=["ko", "en"],
+    confidence_threshold=0.3,
+    download_enabled=True
+)
+# 생성 후 속성 설정
+ocr_options.force_full_page_ocr = True
+
+# 가속 옵션 설정
+accelerator_options = AcceleratorOptions(
+    device="cpu",  # 또는 "cuda" (GPU 사용 시)
+    num_threads=4
+)
+
+# 테이블 구조 옵션
+table_options = TableStructureOptions(
+    do_cell_matching=True,
+    mode=TableFormerMode.ACCURATE  # 정확한 테이블 추출 모드
+)
+
+# PDF 파이프라인 옵션 생성
+pdf_options = PdfPipelineOptions(
+    do_table_structure=True,      # 테이블 구조 추출
+    do_ocr=True,                  # OCR 활성화
+    do_code_enrichment=True,     # 코드 인식 활성화
+    do_formula_enrichment=True,  # 수식 인식 활성화
+    do_picture_classification=True,  # 이미지 분류 활성화
+    do_picture_description=True,     # 이미지 설명 활성화
+    force_backend_text=False,     # PDF 내장 텍스트 무시
+    
+    # 세부 옵션들
+    table_structure_options=table_options,
+    ocr_options=ocr_options,
+    
+    # 이미지 관련 설정
+    images_scale=1.5,
+    generate_page_images=True,    # OCR용 페이지 이미지 생성
+    generate_picture_images=True,  # 문서 내 이미지 추출
+    
+    # 기타 설정
+    generate_parsed_pages=True,  # 파싱된 페이지 정보 생성
+    
+    # 가속 옵션
+    accelerator_options=accelerator_options
+)
+
+# 파서 어댑터 생성 시 옵션 전달
+parser_adapter = DoclingParserAdapter(
+    allowed_formats=DOCLING_ALLOWED_FORMATS,
+    pdf_options=pdf_options
+)

@@ -64,6 +64,7 @@ def setup_api_routes(input_port: DocumentProcessingInputPort) -> APIRouter:
         외부 클라이언트로부터 문서를 업로드 받아 애플리케이션 코어의 문서 처리 프로세스를 시작시키는 API 엔드포인트입니다.
         이 어댑터는 실제 파싱이나 청킹 로직을 수행하지 않고, 해당 작업을 애플리케이션 코어에 위임합니다.
         """
+        print(f"[API] 엔드포인트 호출 시작: 파일명 = {file.filename}")
         if not file.filename:
              raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

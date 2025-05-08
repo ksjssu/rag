@@ -9,6 +9,17 @@ import uvicorn
 import os
 import logging
 from typing import Optional, List
+import tempfile
+from pathlib import Path
+import sys
+
+from docling.datamodel.pipeline_options import (
+    PdfPipelineOptions,
+    EasyOcrOptions,
+    TableStructureOptions,
+    AcceleratorOptions,
+    TableFormerMode
+)
 
 # Configure logging
 logging.basicConfig(
@@ -19,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # --- 프라이머리 어댑터 설정 함수 임포트 ---
 # 기존: from adapters.primary.api_adapter import setup_api_routes
-from .adapters.primary.api_adapter import setup_api_routes # <-- 상대 경로 임포트로 변경 (.adapters...)
+from src.adapters.primary.api_adapter import setup_api_routes
 
 # --- 애플리케이션 계층 유스케이스 임포트 ---
 # 기존: from application.use_cases import IngestDocumentUseCase
@@ -57,6 +68,9 @@ MILVUS_PASSWORD: Optional[str] = os.getenv("MILVUS_PASSWORD", "smr0701!") # 환�
 DOCLING_ALLOWED_FORMATS: List[str] = os.getenv("DOCLING_ALLOWED_FORMATS", "pdf,docx,xlsx,pptx,jpg,png").split(',') # 쉼표로 구분된 문자열을 리스트로 변환
 # DOCLING_API_KEY = os.getenv("DOCLING_API_KEY") # EnvApiKeyAdapter가 처리 가능
 
+# 추가: 한글 인식을 위한 OCR 설정
+DOCLING_OCR_LANGUAGES: List[str] = os.getenv("DOCLING_OCR_LANGUAGES", "kor,eng").split(',')
+
 # 청킹 설정 (심플 청킹 또는 Docling HybridChunker에 전달될 설정)
 DEFAULT_CHUNK_SIZE: int = int(os.getenv("DEFAULT_CHUNK_SIZE", 1000))
 DEFAULT_CHUNK_OVERLAP: int = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))
@@ -86,9 +100,28 @@ def create_app() -> FastAPI:
     apikey_adapter = EnvApiKeyAdapter()
     logger.info("- Created EnvApiKeyAdapter instance.")
 
-    # 파싱 어댑터 (Docling 구현체 - DocumentParsingPort)
-    # __init__에 allowed_formats 등 설정 전달 (DoclingAdapter 상세 구현에서 확인)
-    parser_adapter = DoclingParserAdapter(allowed_formats=DOCLING_ALLOWED_FORMATS)
+    # 기본 EasyOcrOptions 인스턴스 생성 (기본값 사용)
+    ocr_options = EasyOcrOptions(
+        lang=["ko", "en"],  # 한국어와 영어 지원
+        confidence_threshold=0.3,  # 낮은 신뢰도도 허용
+        download_enabled=True  # 필요한 모델 자동 다운로드
+    )
+
+    # OcrOptions의 force_full_page_ocr 필드 설정 (별도로 설정)
+    ocr_options.force_full_page_ocr = True
+
+    # 간소화된 PDF 파이프라인 옵션
+    pdf_options = PdfPipelineOptions(
+        do_ocr=True,  # OCR 활성화
+        ocr_options=ocr_options,  # OCR 옵션 설정
+        generate_page_images=True  # OCR을 위한 이미지 생성
+    )
+
+    # 파서 어댑터 생성
+    parser_adapter = DoclingParserAdapter(
+        allowed_formats=DOCLING_ALLOWED_FORMATS
+       # pdf_options=pdf_options
+    )
     logger.info("- Created DoclingParserAdapter instance.")
 
     # 청킹 어댑터 (Docling HybridChunker 구현체 또는 폴백 - TextChunkingPort)
@@ -104,7 +137,7 @@ def create_app() -> FastAPI:
     embedder_adapter = BgeM3EmbedderAdapter(
         model_name=EMBEDDING_MODEL_NAME,
         device=EMBEDDING_DEVICE,
-        api_key_port=apikey_adapter # 임베딩 어댑터가 API 키가 필요하다면 주입
+        #api_key_port=apikey_adapter # 임베딩 어댑터가 API 키가 필요하다면 주입
     )
     logger.info("- Created BgeM3EmbedderAdapter instance.")
 
@@ -116,9 +149,7 @@ def create_app() -> FastAPI:
             host=MILVUS_HOST,
             port=MILVUS_PORT,
             collection_name=MILVUS_COLLECTION,
-            user=MILVUS_USER,
-            password=MILVUS_PASSWORD,
-            # MilvusAdapter __init__에 필요한 다른 파라미터 추가
+            token=f"{MILVUS_USER}:{MILVUS_PASSWORD}"  # user와 password를 token으로 결합
         )
         logger.info("- Created MilvusAdapter instance and attempted connection.")
     except Exception as e:
@@ -178,9 +209,20 @@ def create_app() -> FastAPI:
     #          except Exception as e:
     #              logger.error(f"Error loading Milvus collection '{MILVUS_COLLECTION}' on startup: {e}")
 
+    @app.middleware("http")
+    async def log_requests(request, call_next):
+        print(f"요청 수신: {request.url.path}", file=sys.stderr)
+        try:
+            response = await call_next(request)
+            print(f"응답 송신: {response.status_code}", file=sys.stderr)
+            return response
+        except Exception as e:
+            print(f"오류 발생: {str(e)}", file=sys.stderr)
+            raise
 
     logger.info("--- Application Assembly Complete ---")
     logger.info("Application is ready.")
+    print(f"__name__ 값: {__name__}")
 
     # 조립이 완료된 FastAPI 애플리케이션 인스턴스 반환
     return app
@@ -189,6 +231,7 @@ def create_app() -> FastAPI:
 # MilvusAdapter 초기화 실패 시 create_app 내에서 예외가 발생하고 함수가 중단될 수 있습니다.
 try:
     app = create_app()
+    print(f"애플리케이션 조립 완료: {app}")
 except Exception as e: # create_app 실행 중 발생하는 예외 처리
     logger.error(f"--- FATAL ERROR: Application startup failed during assembly --- Error: {e}")
     app = None # 앱 인스턴스 생성 실패
@@ -196,15 +239,5 @@ except Exception as e: # create_app 실행 중 발생하는 예외 처리
 
 # --- 애플리케이션 실행 ---
 # create_app이 성공하고 app 인스턴스가 생성된 경우에만 서버 실행
-if __name__ == "__main__" and app is not None:
-    logger.info("\n--- Starting FastAPI application server ---")
-    # uvicorn.run() 함수 호출. 호스트와 포트 설정. reload=True는 개발용.
-    try:
-        # uvicorn.run(app, host="0.0.0.0", port=8000, reload=True) # app 인스턴스 직접 전달
-        # 또는 모듈 경로 문자열 전달 방식 (main:app)
-        uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True) # 개발 모드 예시 (파일 이름:모듈 이름 형태)
-    except Exception as e:
-         logger.error(f"Error running uvicorn server: {e}")
-    logger.info("--- FastAPI application server stopped ---")
-elif app is None:
-    logger.error("\nFastAPI application server did not start due to previous assembly errors.")
+# 
+

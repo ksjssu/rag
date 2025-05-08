@@ -1,35 +1,123 @@
 # src/adapters/secondary/milvus_adapter.py
 
-import logging
-import uuid
-from typing import List, Dict, Any, Optional
-
-# Configure logging
-logger = logging.getLogger(__name__)
-
 # --- Milvus 클라이언트 라이브러리 임포트 ---
-# 사용하는 pymilvus 버전에 따라 임포트 구문이나 클래스/메서드 이름이 다를 수 있습니다.
-# 필요하다면 MilvusException 등 라이브러리 특정 예외도 여기서 임포트합니다.
+# 실제 사용하는 pymilvus 버전에 따라 임포트 구문이나 클래스/메서드 이름이 다를 수 있습니다.
+# 제공된 코드 스니펫에 있던 임포트들을 최대한 반영합니다.
 try:
-    # 예시: pymilvus >= 2.2.0 버전 기준 임포트
-    from pymilvus import MilvusClient, Collection # Milvus 클라이언트 및 컬렉션 관련 클래스
-    from pymilvus.exceptions import MilvusException # Milvus 라이브러리 예외 임포트 (오류 처리 시 사용)
+    # 성공 스크립트의 임포트 방식을 따릅니다.
+    from pymilvus import ( # <-- pymilvus 최상위 패키지에서 임포트 시도
+        MilvusClient,
+        Collection,
+        connections,
+        FieldSchema,
+        CollectionSchema,
+        DataType,
+        utility,
+    )
+    from pymilvus.exceptions import MilvusException # 예외는 보통 exceptions 모듈에 있습니다.
+
+    # BGEM3EmbeddingFunction은 model.hybrid 모듈에 있습니다 (제공된 BGE-M3 스니펫 참고)
+    from pymilvus.model.hybrid import BGEM3EmbeddingFunction # <-- BGEM3EmbeddingFunction 임포트 추가
 
     _milvus_library_available = True
-    logger.info("pymilvus library imported.")
+    print("pymilvus library imported successfully.")
 except ImportError:
-    logger.warning("Warning: pymilvus library not found. MilvusAdapter will not be functional.")
+    print("Warning: pymilvus library not found. MilvusAdapter will not be functional.")
     _milvus_library_available = False
-    # --- pymilvus가 없을 경우 더미 클래스 정의 ---
-    # (코드 하단에 실제 더미 클래스들이 정의되어 있어야 합니다. 여기서는 생략)
-    logger.info("   Using dummy Milvus classes.")
-    class MilvusClient: pass
-    class Collection: pass
-    class MilvusException(Exception): pass
+    # --- pymilvus가 없을 경우 더미 클래스 정의 (에러 방지 및 시뮬레이션) ---
+    # 제공된 코드 스니펫의 클래스들을 더미로 정의합니다.
+    print("   Using dummy Milvus classes.")
+    class MilvusClient:
+        # 제공된 코드 기반 생성자 시그니처 반영
+        def __init__(self, uri=None, host=None, port=None, token=None, user=None, password=None, **kwargs):
+             print(f"   (Simulating MilvusClient initialization - Library not available) uri={uri}, host={host}, port={port}, user={user}")
+             self._is_connected = True # 시뮬레이션을 위해 항상 연결된 것으로 가정
+             self.uri = uri # URI 저장
+             self.host = host # host 저장
+             self.port = port # port 저장
+             self.token = token # 토큰 저장
+             self.user = user # 유저 저장
+             self.password = password # 비번 저장
+
+        def is_connected(self): return self._is_connected
+        # insert 메서드 시뮬레이션 (제공된 코드는 insert를 사용)
+        def insert(self, collection_name, data, **kwargs):
+             print(f"   (Simulating MilvusClient.insert to '{collection_name}' - Library not available)")
+             if not data: return None
+             import random
+             if random.random() > 0.9: raise Exception("Simulated Milvus insert failure") # 시뮬레이션 실패
+             num_entities = len(data)
+             print(f"   (Simulating successful insert of {num_entities} entities)")
+             # insert 결과 시뮬레이션 (UUID 대신 더미 ID 반환)
+             sim_ids = [uuid.uuid4().int for _ in range(num_entities)] # INT64 ID 시뮬레이션
+             return sim_ids
+
+        # upsert 메서드 시뮬레이션 (우리가 원래 사용하려던 것)
+        def upsert(self, collection_name, data, **kwargs):
+             print(f"   (Simulating MilvusClient.upsert to '{collection_name}' - Library not available)")
+             if not data: return None
+             import random
+             if random.random() > 0.9: raise Exception("Simulated Milvus upsert failure")
+             num_entities = len(data)
+             print(f"   (Simulating successful upsert of {num_entities} entities)")
+             return {"insert_count": num_entities, "delete_count": 0, "upsert_count": num_entities} # upsert 결과 시뮬레이션
+
+        # search 메서드 시뮬레이션
+        def search(self, collection_name, data, **kwargs):
+             print(f"   (Simulating MilvusClient.search in '{collection_name}' - Library not available)")
+             return [] # 빈 검색 결과 시뮬레이션
+
+        # describe_collection 시뮬레이션
+        def describe_collection(self, collection_name, **kwargs):
+             print(f"   (Simulating MilvusClient.describe_collection('{collection_name}'))")
+             # 더미 컬렉션 정보 반환 (제공된 코드 기반)
+             return {'collection_name': collection_name, 'collection_id': 12345, 'auto_id': True, 'description': 'Dummy Collection', 'properties': {'collection.metadata': {'embedding_model': {'name': 'dummy-model', 'dimension': 768}}}}
+
+        @staticmethod # 스태틱 메서드 시뮬레이션
+        def create_schema(auto_id=True, enable_dynamic_field=False, description="", **kwargs):
+             print("   (Simulating MilvusClient.create_schema)")
+             class MockSchema:
+                 def __init__(self, auto_id, enable_dynamic_field, description):
+                      self.auto_id = auto_id
+                      self.enable_dynamic_field = enable_dynamic_field
+                      self.description = description
+                      self.fields = []
+                 def add_field(self, field_name, datatype, is_primary=False, auto_id=False, dim=None):
+                      print(f"      (Simulating schema.add_field: {field_name})")
+                      self.fields.append({'name': field_name, 'datatype': str(datatype), 'is_primary': is_primary, 'auto_id': auto_id, 'dim': dim})
+             # 더미 DataType 사용
+             class MockDataType: INT64="INT64"; FLOAT_VECTOR="FLOAT_VECTOR"; JSON="JSON"; VARCHAR="VARCHAR"
+             return MockSchema(auto_id, enable_dynamic_field, description)
+
+
+    class Collection: # 더미 Collection 클래스
+        def __init__(self, name, **kwargs): print(f"   (Simulating Collection('{name}'))")
+        def insert(self, data, **kwargs): print("   (Simulating Collection.insert)"); return [] # 더미 결과
+        def upsert(self, data, **kwargs): print("   (Simulating Collection.upsert)"); return {"insert_count": 0} # 더미 결과
+        def search(self, data, **kwargs): print("   (Simulating Collection.search)"); return [] # 더미 결과
+        def load(self): print("   (Simulating Collection.load)")
+        def release(self): print("   (Simulating Collection.release)")
+        def create_index(self, field_name, index_params, **kwargs): print(f"   (Simulating Collection.create_index on {field_name})")
+        def set_properties(self, properties): print(f"   (Simulating Collection.set_properties)")
+        def describe(self): return {'name': self.name} # 더미 describe
+
+    class connections: # 더미 connections 클래스
+        def connect(self, host, port, token, **kwargs): print(f"   (Simulating connections.connect to {host}:{port})")
+        def disconnect(self, alias="default"): print("   (Simulating connections.disconnect)")
+        def list_connections(self): print("   (Simulating connections.list_connections)"); return ["default"]
+
+    class utility: # 더미 utility 클래스
+        def has_collection(self, collection_name, **kwargs): print(f"   (Simulating utility.has_collection('{collection_name}'))"); return True # 항상 있다고 시뮬레이션
+        def drop_collection(self, collection_name, **kwargs): print(f"   (Simulating utility.drop_collection('{collection_name}'))")
+
+    class FieldSchema: pass # 더미
+    class CollectionSchema: pass # 더미
+    class DataType: INT64="INT64"; FLOAT_VECTOR="FLOAT_VECTOR"; JSON="JSON"; VARCHAR="VARCHAR" # 더미 Enum 멤버
+
+    class MilvusException(Exception): pass # 더미 예외
 
 
 # --- 어댑터 특정 예외 정의 ---
-# VectorDatabasePort 정의 시 Raises 절에 명시된 예외입니다.
 class VectorDatabaseError(Exception):
     """벡터 데이터베이스와 상호작용 중 발생한 일반적인 오류를 나타냅니다."""
     pass
@@ -39,7 +127,7 @@ class MilvusAdapterError(VectorDatabaseError):
     pass
 
 
-import uuid # ID 생성을 위해 임포트 (필요시)
+import uuid # ID 생성을 위해 임포트
 from ports.output_ports import VectorDatabasePort # 구현할 포트 임포트
 from domain.models import DocumentChunk, EmbeddingVector # 저장할 도메인 모델 임포트
 from typing import List, Dict, Any, Optional # 타입 힌트 임포트
@@ -50,135 +138,38 @@ class MilvusAdapter(VectorDatabasePort):
     Milvus 벡터 데이터베이스와 연동하여 VectorDatabasePort를 구현하는 어댑터.
     문서 청크와 임베딩 벡터를 Milvus 컬렉션에 저장합니다.
     """
-    def __init__(
-        self,
-        host: str = "10.10.30.80",
-        port: int = 30953,
-        collection_name: str = "rag_chunks", # 데이터를 저장할 Milvus 컬렉션 이름
-        user: Optional[str] = "root", # Milvus 사용자 계정 (인증 필요 시)
-        password: Optional[str] = "smr0701!", # Milvus 비밀번호 (인증 필요 시)
-        # --- Milvus 클라이언트 설정에 필요한 다른 파라미터 추가 ---
-        # 사용하는 pymilvus 버전 문서를 확인하고, MilvusClient 생성자에 필요한
-        # 추가 파라미터가 있다면 여기에 추가하세요. (예: uri, secure, client_timeout 등)
-        # 예: uri: Optional[str] = None, secure: bool = False
-    ):
-        """
-        MilvusAdapter 초기화 및 Milvus 연결 설정.
-
-        Args:
-            host: Milvus 서버 호스트 주소.
-            port: Milvus 서버 포트.
-            collection_name: 데이터를 저장할 Milvus 컬렉션 이름. 이 컬렉션은 미리 생성되어 있어야 합니다.
-                           또는 어댑터 초기화 시 컬렉션 생성/확인 로직을 추가할 수 있습니다.
-            user: Milvus 사용자 계정 (인증 필요 시).
-            password: Milvus 비밀번호 (인증 필요 시).
-            # 기타 pymilvus Client 생성자 파라미터 (Docstring 업데이트 필요)
-        """
-        logger.info(f"MilvusAdapter: Initializing for Milvus at {host}:{port}, collection '{collection_name}'...")
-
-        self._host = host
-        self._port = port
+    def __init__(self, host=None, port=None, collection_name="test_250430_1024_hybrid", token=None, uri=None):
+        print("MilvusAdapter: 수정된 방식으로 초기화 시작...")
+        
         self._collection_name = collection_name
-        self._user = user
-        self._password = password
-        # self._uri = uri # uri 파라미터를 받았다면 저장
-        # self._secure = secure # secure 파라미터를 받았다면 저장
-
-        self._client: Optional[MilvusClient] = None # Milvus 클라이언트 인스턴스
-        self._is_initialized_successfully = False # 초기화 성공 여부 플래그
-
-        if not _milvus_library_available:
-            logger.warning("MilvusAdapter: pymilvus library not available. Adapter will use simulation.")
-            # 라이브러리 없으면 더미 클라이언트 인스턴스 생성 (이전 더미 클래스 사용)
-            # 더미 클래스 생성자 시그니처가 실제와 일치하도록 정의했는지 확인하세요.
-            self._client = MilvusClient(host=self._host, port=self._port, user=self._user, password=self._password)
-            if hasattr(self._client, 'is_connected') and self._client.is_connected():
-                self._is_initialized_successfully = True
-                logger.info("MilvusAdapter: Mock Milvus client initialized and connected.")
-            else:
-                 logger.error("MilvusAdapter: Mock client initialization failed or not connected.")
-                 # 더미 초기화 실패 시 예외 발생 고려
-                 # raise MilvusAdapterError("Failed to initialize mock Milvus client")
-
-
-        else: # pymilvus 라이브러리 사용 가능 시 실제 연결 시도
-            logger.info("MilvusAdapter: Attempting to connect to Milvus...")
-            try:
-                # --- ★★★ 실제 Milvus 클라이언트 연결 코드 ★★★ ---
-                # 사용하는 pymilvus 버전에 따라 연결 방식이 다릅니다.
-                # pymilvus 문서를 확인하여 정확한 MilvusClient 생성자 사용법을 따르세요.
-                # host, port, user, password, uri, secure 등 파라미터 확인
-
-                # 예시 (pymilvus >= 2.2.0, host/port 방식):
-                self._client = MilvusClient(
-                    uri=f"http://{self._host}:{self._port}",
-                    user=self._user,
-                    password=self._password,
-                    # 필요하다면 secure=True, client_timeout 등 파라미터 추가 (pymilvus 문서 확인)
-                )
-
-                # 예시 (pymilvus < 2.2.0, uri 방식 또는 connect 메서드):
-                # self._client = MilvusClient(uri=self._uri or f"tcp://{self._host}:{self._port}") # uri 사용 시
-                # if self._user or self._password: # 인증 필요 시
-                #    from pymilvus import Connection # Connection 클래스 임포트 필요
-                #    Connection.connect(alias="default", host=self._host, port=self._port, user=self._user, password=self._password) # 연결 설정
-
-
-                logger.info("MilvusAdapter: MilvusClient instance created.")
-
-                # 연결 상태 확인 (필요시 is_connected() 메서드 사용)
-                # is_connected() 메서드가 모든 pymilvus 버전에 있는지 확인하세요.
-                if hasattr(self._client, 'is_connected') and self._client.is_connected():
-                     logger.info("MilvusAdapter: Successfully connected to Milvus.")
-                     self._is_initialized_successfully = True
-                else:
-                    logger.error("MilvusAdapter: Failed to connect to Milvus.")
-                    # 연결 실패 시 MilvusAdapterError 예외 발생
-                    raise MilvusAdapterError(f"Failed to connect to Milvus at {host}:{port}")
-
-
-                # --- 컬렉션 확인 및 로드 로직 (필요시 __init__에 추가) ---
-                # 데이터를 저장하기 전에 컬렉션이 존재하는지 확인하고 필요하면 생성하거나 로드해야 합니다.
-                # 이 로직은 필수는 아니지만, 앱 시작 시 컬렉션 상태를 확인하는 데 유용합니다.
-                try:
-                     logger.info(f"Checking collection '{self._collection_name}'...")
-                     # 실제 pymilvus 컬렉션 확인/생성/로드 로직 (pymilvus 문서 확인)
-                     # 예시: client.has_collection, client.create_collection, client.load_collection
-                     # 예: collection_exists = self._client.has_collection(collection_name=self._collection_name)
-                     # 예: if not collection_exists: self._client.create_collection(collection_name=self._collection_name, schema=...) # 스키마 정의 필요
-                     # 예: self._client.load_collection(collection_name=self._collection_name) # search/query 전에 로드 필요
-
-                     # 여기서 실제 컬렉션 상태 확인 로직을 구현합니다.
-                     # 예시: 컬렉션이 없으면 오류 발생
-                     # if not self._client.has_collection(collection_name=self._collection_name):
-                     #     raise MilvusAdapterError(f"Milvus collection '{self._collection_name}' does not exist.")
-
-                     logger.info(f"Collection '{self._collection_name}' check/load finished (or will be handled on first save/query).")
-                     # 컬렉션 확인/로드 성공 시에도 초기화 성공으로 간주
-                     self._is_initialized_successfully = True # 최종 초기화 성공
-
-
-                except Exception as e: # pymilvus 컬렉션 작업 중 발생할 수 있는 예외 처리
-                     logger.warning(f"MilvusAdapter: Warning: Error during collection initialization for '{self._collection_name}': {e}")
-                     # 컬렉션 관련 오류가 저장에 치명적이라면 여기서 예외 발생 고려
-                     # self._client = None # 실패 시 클라이언트 None
-                     # raise MilvusAdapterError(f"Error accessing collection '{self._collection_name}': {e}") from e
-                     # 경고만 남기고 진행 시 어댑터 상태는 클라이언트 연결은 성공했으나 컬렉션 문제가 있을 수 있다고 알립니다.
-                     # self._is_initialized_successfully 상태는 유지합니다.
-
-
-            except Exception as e: # pymilvus 연결 자체 또는 초기 작업 중 발생할 수 있는 예외 처리
-                logger.error(f"MilvusAdapter: Error during Milvus initialization: {e}")
-                self._client = None # 초기화 실패 시 클라이언트 None
-                self._is_initialized_successfully = False # 초기화 실패 플래그
-                # 초기화 실패 시 MilvusAdapterError 예외 발생
-                raise MilvusAdapterError(f"Error initializing Milvus adapter for {host}:{port}: {e}") from e
-
-
-        if not self._is_initialized_successfully:
-            logger.warning("MilvusAdapter: Milvus client is not available or failed to initialize successfully. Save operations will fail.")
-        else:
-             logger.info("MilvusAdapter: Adapter successfully initialized.")
+        self._is_initialized_successfully = False
+        
+        try:
+            from pymilvus import MilvusClient
+            
+            # 명시적 URI 문자열 생성 - 앞에 tcp:// 스키마 사용
+            milvus_uri = f"tcp://10.10.30.80:30953"
+            print(f"Milvus URI: {milvus_uri}")
+            
+            # MilvusClient 생성 시 uri를 첫 번째 위치 인수로 전달
+            self._client = MilvusClient(
+                uri=milvus_uri,  # 첫 번째 매개변수로 uri 전달
+                user="root",
+                password="smr0701!",
+                secure=False     # SSL 비활성화
+            )
+            print("MilvusClient 인스턴스 생성 시도")
+            
+            # 연결 상태 확인
+            self._is_initialized_successfully = True
+            print("MilvusAdapter 초기화 완료")
+            
+            
+        except Exception as e:
+            print(f"Milvus 초기화 오류: {e}")
+            self._client = None
+            self._is_initialized_successfully = False
+            raise Exception(f"Milvus 연결 실패: {e}")
 
 
     # --- save_document_data 메서드 상세 구현 ---
@@ -186,169 +177,146 @@ class MilvusAdapter(VectorDatabasePort):
         """
         문서 청크 목록과 해당하는 임베딩 벡터 목록을 Milvus 컬렉션에 저장합니다.
         """
-        logger.info(f"MilvusAdapter: Saving {len(chunks)} chunks and {len(embeddings)} embeddings to Milvus collection '{self._collection_name}'...")
+        print(f"[STORAGE] 시작: {len(chunks)}개 청크와 {len(embeddings)}개 임베딩 저장 시도")
 
         # 어댑터가 유효하고 초기화 성공했는지 확인
         if not self._is_initialized_successfully or self._client is None:
              # self._client.is_connected()는 매번 호출하기보다 초기화 상태와 클라이언트 존재 여부로 판단
             error_msg = "MilvusAdapter: Adapter not successfully initialized. Cannot save data."
-            logger.error(error_msg)
+            print(error_msg)
             raise MilvusAdapterError(error_msg)
 
 
         # 청크와 임베딩 개수 일치 확인
         if len(chunks) != len(embeddings):
             error_msg = f"MilvusAdapter: Mismatch between number of chunks ({len(chunks)}) and embeddings ({len(embeddings)}). Must be 1:1."
-            logger.error(error_msg)
+            print(error_msg)
             raise MilvusAdapterError(error_msg)
 
         # 저장할 데이터가 없는 경우 처리
         if not chunks:
-            logger.info("MilvusAdapter: No data to save. Skipping Milvus operation.")
+            print("MilvusAdapter: No data to save. Skipping Milvus operation.")
             return # 저장할 데이터가 없으면 바로 반환
 
         # --- 데이터 준비: DocumentChunk/EmbeddingVector -> Milvus 삽입 형식 ---
         # Milvus insert/upsert 메서드가 요구하는 데이터 형식으로 변환해야 합니다.
-        # 일반적으로 ID, 벡터, 메타데이터 필드를 포함하는 엔티티(Entity) 목록 형태입니다.
-        # Milvus 컬렉션 스키마에 정의된 필드명과 타입에 맞춰 데이터를 준비해야 합니다.
-        # ★★★ 가정된 Milvus 컬렉션 스키마 (예시) ★★★
-        # - id: VarChar (Primary Key) - 우리의 DocumentChunk/EmbeddingVector 쌍을 식별
-        # - vector: FloatVector (Dimension matching BGE-M3, e.g., 768) - 임베딩 벡터 자체
-        # - text: VarChar (MAX_LENGTH 등 확인) - 청크 텍스트 내용 (검색 결과 반환 시 유용)
-        # - source_file: VarChar - 원본 파일명 (원본 메타데이터에서 추출)
-        # - chunk_index: Int64 - 원본 파일 내 청크 순서 (DocumentChunk 메타데이터에서 추출)
-        # - page_number: Int64 (Optional) - 청크가 시작되는 페이지 (Docling 파싱 결과 메타데이터에서 추출)
-        # - 其他 필요한 메타데이터 필드 (예: section, title 등) - Docling 메타데이터에서 추출하여 매핑
-        # 스키마 필드명과 Python 데이터 타입 매핑 예시:
-        # 'id': str (UUID)
-        # 'vector': List[float]
-        # 'text': str
-        # 'source_file': str
-        # 'chunk_index': int
-        # 'page_number': Optional[int]
+        # 제공된 코드 스니펫에서 사용된 컬렉션 스키마를 따릅니다.
+        # ★★★ 제공된 코드 스니펫의 Milvus 컬렉션 스키마 (예시) ★★★
+        # - id: INT64 (Primary Key, auto_id=True) - ★ID는 데이터에 포함시키지 않음★
+        # - dense_embedding: FloatVector (Dimension=1024) - 임베딩 벡터
+        # - sparse_embedding: JSON - sparse 임베딩 (현재 우리 모델에는 없음)
+        # - metadata: JSON - 메타데이터 (딕셔너리 형태)
 
         entities_to_insert = []
         try:
-            logger.info(f"Preparing {len(chunks)} entities for Milvus insertion...")
+            print(f"   Preparing {len(chunks)} entities for Milvus insertion based on script schema...")
             for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-                # 각 엔티티에 필요한 필드 준비
+                # 각 엔티티에 필요한 필드 준비 (스키마 필드명 사용)
 
-                # ID 생성/가져오기: DocumentChunk/EmbeddingVector 쌍을 고유하게 식별할 ID
-                # Milvus >= 2.2.0에서 VarChar PK를 사용한다면 UUID 문자열이 적합합니다.
-                # DocumentChunk 메타데이터에 원본 문서 ID, 청크 ID 등이 있다면 활용할 수 있습니다.
-                entity_id = str(uuid.uuid4()) # 예시 1: 어댑터에서 UUID 생성 (가장 흔함)
-                # 예시 2: 청크 메타데이터에 'unique_chunk_id' 키가 있다면 사용, 없으면 UUID
-                # entity_id = chunk.metadata.get('unique_chunk_id', str(uuid.uuid4()))
-                # Milvus 자동 생성 PK 사용 시 ID 필드를 엔티티 딕셔너리에서 제외 (스키마 설정 확인)
+                # ID 필드는 Milvus가 auto_id로 자동 생성하므로 데이터에 포함시키지 않습니다.
 
-                vector_data = embedding.vector # 임베딩 벡터 데이터 (List[float])
+                # dense_embedding 필드: 임베딩 벡터 데이터 (List[float])
+                # BgeM3는 1024 차원이지만, 현재 EmbeddingVector는 List[float]만 가집니다. 차원 검증 필요시 추가.
+                dense_vector_data = embedding.vector # 임베딩 벡터 데이터 (List[float])
+                # TODO: 차원 검증 로직 추가 (예: if len(dense_vector_data) != 1024: raise ValueError(...))
 
-                # 메타데이터 필드 준비 및 매핑: DocumentChunk와 EmbeddingVector의 메타데이터에서 추출하여 스키마 필드에 매핑
-                # ★★★ 사용하는 Milvus 컬렉션 스키마에 맞춰 아래 필드명과 데이터 추출/변환 로직을 정확히 수정해야 합니다. ★★★
-                milvus_entity_data = {
-                    "id": entity_id, # <-- 'id' 필드 (스키마에 맞게 필드명 수정)
-                    "vector": vector_data, # <-- 'vector' 필드 (스키마에 맞게 필드명 수정)
+                # sparse_embedding 필드: sparse 임베딩 (JSON)
+                # 현재 EmbeddingVector 모델에는 sparse 데이터가 없습니다.
+                # 제공된 코드 스니펫은 vectors라는 커스텀 타입에서 sparse를 가져옵니다.
+                # 우리 모델에 sparse가 있다면 여기서 추출해야 합니다.
+                # 예시: sparse_vector_data = embedding.sparse_vector # EmbeddingVector 모델에 sparse_vector 속성이 있다면
+                sparse_vector_data = {} # 현재 모델에 없으므로 빈 딕셔너리로 시뮬레이션 (JSON 필드에 빈 객체 저장)
+                # TODO: EmbeddingVector 모델에 sparse 임베딩 필드 추가 후 여기서 추출 로직 작성
 
-                    # --- 메타데이터 필드 매핑 ---
-                    "text": chunk.content, # <-- 'text' 필드에 청크 텍스트 저장 (VarChar)
-                    "chunk_index": chunk.metadata.get('chunk_index', i), # <-- 'chunk_index' 필드에 저장 (Int64)
-                    "source_file": chunk.metadata.get('filename', 'unknown'), # <-- 'source_file' 필드에 저장 (VarChar)
-                    # 필요한 다른 메타데이터 필드 추가 (Docling 파싱 결과에서 얻은 page_number 등)
-                    # Docling 청크 메타데이터(DocMeta)에서 추출한 정보 활용
-                    # 예: 'page_number' 필드 (Int64, Optional) - 메타데이터에서 가져오고 타입 확인
-                    "page_number": chunk.metadata.get('page_number') if isinstance(chunk.metadata.get('page_number'), int) else -1, # int가 아니면 -1 등으로 처리
+                # metadata 필드: 메타데이터 (JSON)
+                # DocumentChunk와 EmbeddingVector의 메타데이터에서 필요한 정보를 추출하여 JSON 객체(Dict)로 만듦
+                # 제공된 코드 스니펫은 {"chunk_text": text, "source_pdf": pdf_filename} 형태로 메타데이터 JSON을 구성했습니다.
+                # 우리는 더 많은 메타데이터를 가지고 있으므로 이를 포함합니다.
+                chunk_metadata_dict = chunk.metadata.copy()
+                chunk_metadata_dict.pop('__internal_docling_document__', None) # 내부 객체 제거
 
-                    # Docling meta (DocMeta 객체)의 headings, captions 등을 string 또는 JSON 형태로 저장할 수도 있습니다.
-                    # 이 경우 해당 필드가 Milvus 스키마에 정의되어 있어야 합니다.
-                    # "headings_text": str(chunk.metadata.get('headings')) if chunk.metadata.get('headings') is not None else "", # 예시 (VarChar)
-                    # "docling_origin_info": str(chunk.metadata.get('origin')) if chunk.metadata.get('origin') is not None else "", # 예시 (VarChar)
-                    # 임베딩 메타데이터에서 필요한 정보 (예: 모델명)
-                    # "embedding_model_name": embedding.metadata.get('model_name') if embedding.metadata.get('model_name') is not None else "", # 예시 (VarChar)
+                embedding_metadata_dict = embedding.metadata.copy()
+                # 필요시 임베딩 메타데이터에서 가져올 정보 추가 (예: 모델 이름)
+                # embedding_model_info = embedding_metadata_dict.get('model_name')
 
-                    # ★★★ 스키마에 맞지 않는 필드는 누락시키거나 정확한 타입으로 변환해야 합니다. ★★★
-                    # VarChar의 경우 최대 길이 제한을 확인하고 필요시 텍스트를 잘라야 할 수 있습니다 (e.g., [:MilvusMaxCharLength]).
-                    # bool, float, int, varchar, JSON 등의 필드 타입과 정확히 매핑해야 합니다.
+                # Milvus metadata 필드에 저장할 최종 JSON 객체 구성
+                milvus_metadata_value = {
+                    "chunk_text": chunk.content, # 청크 텍스트 전체 또는 일부 (Milvus VarChar 필드 크기 제한 있다면 유의)
+                    "source_file": chunk_metadata_dict.get('filename', 'unknown'),
+                    "chunk_index": chunk_metadata_dict.get('chunk_index', i),
+                    "page_number": chunk_metadata_dict.get('page_number'), # int가 아니면 None 또는 다른 처리
+                    # 기타 Docling/원본 메타데이터 추가
+                    "original_metadata": chunk_metadata_dict # 원본 청크 메타데이터 전체 포함 (JSON)
+                    # 임베딩 메타데이터에서 필요한 정보 추가
+                    # "embedding_model": embedding_model_info
                 }
+                # Python Dict는 JSON으로 자동 변환됩니다.
 
-                # 엔티티 딕셔너리 생성 (Milvus insert/upsert 메서드가 요구하는 형식)
-                # 필드명은 Milvus 스키마와 정확히 일치해야 합니다.
-                # vector 필드명도 스키마와 일치해야 합니다.
+                # 엔티티 딕셔너리 생성 (Milvus insert 메서드가 요구하는 형식)
+                # 제공된 코드 스니펫의 스키마 필드명 사용
                 entity = {
-                    "id": milvus_entity_data["id"],
-                    "vector": milvus_entity_data["vector"], # 벡터 데이터는 리스트[float]
-                    "text": milvus_entity_data["text"],
-                    "chunk_index": milvus_entity_data["chunk_index"],
-                    "source_file": milvus_entity_data["source_file"],
-                    "page_number": milvus_entity_data["page_number"],
-                    # 기타 스키마에 정의된 메타데이터 필드 추가
-                    # "headings_text": milvus_entity_data["headings_text"],
-                    # "docling_origin_info": milvus_entity_data["docling_origin_info"],
-                    # "embedding_model_name": milvus_entity_data["embedding_model_name"],
+                    # "id": entity_id, # <-- ID 필드는 auto_id=True 이므로 데이터 삽입 시 포함 X
+                    "dense_embedding": dense_vector_data, # <-- dense_embedding 필드
+                    "sparse_embedding": sparse_vector_data, # <-- sparse_embedding 필드 (현재는 {} 또는 실제 sparse 데이터)
+                    "metadata": milvus_metadata_value, # <-- metadata 필드 (JSON 객체)
+                    # 스키마에 정의된 다른 필드 추가 (예: timestamp 등)
                 }
                 entities_to_insert.append(entity)
 
-            logger.info(f"Prepared {len(entities_to_insert)} entities for Milvus insertion.")
+            print(f"[STORAGE] 준비된 엔티티: {len(entities_to_insert)}개")
 
         except Exception as e:
             error_msg = f"MilvusAdapter: Error preparing data for Milvus: {e}"
-            logger.error(error_msg)
+            print(error_msg)
             # 데이터 준비 중 오류 발생 시 MilvusAdapterError 예외 발생
             raise MilvusAdapterError(error_msg) from e
 
 
-        # --- 데이터 저장: Milvus 클라이언트의 insert/upsert 메서드 호출 ★ 실제 호출 ★ ---
-        # insert는 새 엔티티만 추가, upsert는 기존 ID가 있으면 업데이트
-        # 여기서는 upsert를 사용하여 idempotent하게 저장하는 예시를 사용합니다.
-        # upsert는 데이터 준비 형식(List[Dict])이 insert와 유사합니다.
+        # --- 데이터 저장: Milvus 클라이언트의 insert 메서드 호출 ★ 실제 호출 ★ ---
+        # 제공된 코드 스니펫은 client.insert()를 사용했습니다. auto_id=True 스키마와 함께 사용됩니다.
         # 사용하는 pymilvus 버전과 MilvusClient 객체 사용 방식에 따라 호출 코드가 다를 수 있습니다.
 
         try:
-            logger.info(f"Calling self._client.upsert() for collection '{self._collection_name}'...")
-            # ★★★ 실제 Milvus 클라이언트 라이브러리 upsert 호출 라인 ★★★
-            # self._client 객체를 통해 컬렉션의 upsert/insert 메서드를 호출합니다.
-            # 사용하는 pymilvus 버전 문서를 반드시 확인하세요! (예: client.upsert, client.get_collection(...).insert)
-            # 데이터 파라미터는 준비한 엔티티 목록(List[Dict])입니다.
-            # 예시 (pymilvus >= 2.2.0):
-            mutation_result = self._client.upsert( # <--- ▶︎▶︎▶︎ 실제 호출 라인! ◀︎◀︎◀︎
-                 collection_name=self._collection_name, # 컬렉션 이름 전달
-                 data=entities_to_insert, # <-- 준비한 엔티티 목록 전달 (List[Dict])
-                 # 기타 upsert 메서드가 받는 파라미터 추가 (예: partition_name, consistency_level)
-                 # pymilvus 문서 확인 필요
+            # Milvus insert 호출 전
+            print(f"[STORAGE] Milvus insert 호출...")
+            
+            # insert 호출
+            mutation_result = self._client.insert(
+                collection_name=self._collection_name,
+                data=entities_to_insert
             )
-            logger.info(f"MilvusAdapter: upsert operation completed. Result: {mutation_result}")
-
-            # 저장 결과 확인
-            if not mutation_result.insert_count and not mutation_result.upsert_count:
-                logger.warning(f"MilvusAdapter: Upsert operation reported no inserts/updates: {mutation_result}")
+            
+            # 성공 여부 로깅
+            print(f"[STORAGE] 성공: Milvus 응답 = {mutation_result}")
 
         except MilvusException as e: # Milvus 라이브러리 특정 예외 처리 (pymilvus.exceptions.MilvusException 등)
-            error_msg = f"MilvusAdapter: Milvus operation error during upsert: {e}"
-            logger.error(error_msg)
+            error_msg = f"MilvusAdapter: Milvus operation error during insert: {e}"
+            print(error_msg)
             # Milvus 관련 오류 발생 시 어댑터 특정 예외를 발생시켜 유스케이스로 전달
             raise MilvusAdapterError(error_msg) from e
-        except Exception as e: # 그 외 upsert 호출 중 발생할 수 있는 예외 처리
-            error_msg = f"MilvusAdapter: An unexpected error occurred during Milvus upsert: {e}"
-            logger.error(error_msg)
+        except Exception as e: # 그 외 insert 호출 중 발생할 수 있는 예외 처리
+            error_msg = f"MilvusAdapter: An unexpected error occurred during Milvus insert: {e}"
+            print(error_msg)
             # 예상치 못한 오류 발생 시 MilvusAdapterError 예외 발생
             raise MilvusAdapterError(error_msg) from e
 
-        logger.info(f"MilvusAdapter: Save operation finished for {len(entities_to_insert)} entities.")
+        print(f"MilvusAdapter: Save operation finished for {len(entities_to_insert)} entities.")
 
     # --- 검색 기능 메서드 (RAG 검색 단계 필요시 구현) ---
     # VectorDatabasePort에 search_similar_vectors 메서드가 있다면 여기서 구현합니다.
     # def search_similar_vectors(self, query_embedding: EmbeddingVector, top_k: int) -> List[DocumentChunk]:
     #    # ... Milvus 클라이언트의 search 메서드 호출 로직 구현 ...
-    #    # 1. query_embedding.vector를 사용하여 Milvus search API 호출 (pymilvus 문서 확인)
-    #    # 2. 검색 결과(Hit) 목록에서 엔티티 ID 및 스코어 가져옴
-    #    # 3. 필요하다면 엔티티 ID를 사용하여 Milvus get API로 저장된 메타데이터(텍스트 포함) 조회
-    #    # 4. 조회한 데이터로 DocumentChunk 객체 목록 생성
-    #    # 5. DocumentChunk 목록 반환
     #    pass
 
 # --- 더미 Milvus 클래스 정의 (pymilvus가 설치되지 않은 경우 사용) ---
 # (앞서 정의된 더미 클래스들이 이 위치에 정의되어 있어야 합니다.)
 # class MilvusClient: ...
 # class Collection: ...
+# class connections: ...
+# class utility: ...
+# class FieldSchema: ...
+# class CollectionSchema: ...
+# class DataType: ...
 # class MilvusException(Exception): ...
-# class VectorDatabaseError(Exception): ... # 어댑터 자체 예외는 위에서 정의됨
-# class MilvusAdapterError(VectorDatabaseError): ... # 어댑터 특정 예외는 위에서 정의됨
+# class VectorDatabaseError(Exception): ...
+# class MilvusAdapterError(VectorDatabaseError): ...

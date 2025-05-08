@@ -74,16 +74,17 @@ class IngestDocumentUseCase(DocumentProcessingInputPort):
             (참고: 임베딩과 청크 데이터는 이 메서드 내부에서 저장소 포트를 통해 저장됩니다.
              반환 값은 저장된 청크 목록으로 유지합니다.)
         """
-        logger.info(f"IngestDocumentUseCase: Starting document ingestion process for {raw_document.metadata.get('filename', 'untitled')}...")
-
+        # 초기 로그
+        logger.error(f"[USECASE] 시작: {raw_document.metadata.get('filename', 'unknown')}")
+        
         try:
             # 1. 파싱 (파싱 포트 호출)
             parsed_document = self._parser_port.parse(raw_document)
-            logger.info("IngestDocumentUseCase: Document parsed successfully.")
+            logger.error(f"[USECASE] 파싱 완료: 길이 {len(parsed_document.content)}")
 
             # 2. 청킹 (청킹 포트 호출)
             chunks = self._chunking_port.chunk(parsed_document)
-            logger.info(f"IngestDocumentUseCase: Document chunked into {len(chunks)} chunks.")
+            logger.error(f"[USECASE] 청킹 완료: 개수 {len(chunks)}")
 
             # 청크가 없다면 임베딩 및 저장 단계 스킵
             if not chunks:
