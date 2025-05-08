@@ -1,5 +1,12 @@
 # src/adapters/secondary/milvus_adapter.py
 
+import logging
+import uuid
+from typing import List, Dict, Any, Optional
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
 # --- Milvus 클라이언트 라이브러리 임포트 ---
 # 사용하는 pymilvus 버전에 따라 임포트 구문이나 클래스/메서드 이름이 다를 수 있습니다.
 # 필요하다면 MilvusException 등 라이브러리 특정 예외도 여기서 임포트합니다.
@@ -9,13 +16,13 @@ try:
     from pymilvus.exceptions import MilvusException # Milvus 라이브러리 예외 임포트 (오류 처리 시 사용)
 
     _milvus_library_available = True
-    print("pymilvus library imported.")
+    logger.info("pymilvus library imported.")
 except ImportError:
-    print("Warning: pymilvus library not found. MilvusAdapter will not be functional.")
+    logger.warning("Warning: pymilvus library not found. MilvusAdapter will not be functional.")
     _milvus_library_available = False
     # --- pymilvus가 없을 경우 더미 클래스 정의 ---
     # (코드 하단에 실제 더미 클래스들이 정의되어 있어야 합니다. 여기서는 생략)
-    print("   Using dummy Milvus classes.")
+    logger.info("   Using dummy Milvus classes.")
     class MilvusClient: pass
     class Collection: pass
     class MilvusException(Exception): pass
@@ -45,11 +52,11 @@ class MilvusAdapter(VectorDatabasePort):
     """
     def __init__(
         self,
-        host: str = "localhost",
-        port: int = 19530,
+        host: str = "10.10.30.80",
+        port: int = 30953,
         collection_name: str = "rag_chunks", # 데이터를 저장할 Milvus 컬렉션 이름
-        user: Optional[str] = None, # Milvus 사용자 계정 (인증 필요 시)
-        password: Optional[str] = None, # Milvus 비밀번호 (인증 필요 시)
+        user: Optional[str] = "root", # Milvus 사용자 계정 (인증 필요 시)
+        password: Optional[str] = "smr0701!", # Milvus 비밀번호 (인증 필요 시)
         # --- Milvus 클라이언트 설정에 필요한 다른 파라미터 추가 ---
         # 사용하는 pymilvus 버전 문서를 확인하고, MilvusClient 생성자에 필요한
         # 추가 파라미터가 있다면 여기에 추가하세요. (예: uri, secure, client_timeout 등)
@@ -67,7 +74,7 @@ class MilvusAdapter(VectorDatabasePort):
             password: Milvus 비밀번호 (인증 필요 시).
             # 기타 pymilvus Client 생성자 파라미터 (Docstring 업데이트 필요)
         """
-        print(f"MilvusAdapter: Initializing for Milvus at {host}:{port}, collection '{collection_name}'...")
+        logger.info(f"MilvusAdapter: Initializing for Milvus at {host}:{port}, collection '{collection_name}'...")
 
         self._host = host
         self._port = port
@@ -81,21 +88,21 @@ class MilvusAdapter(VectorDatabasePort):
         self._is_initialized_successfully = False # 초기화 성공 여부 플래그
 
         if not _milvus_library_available:
-            print("MilvusAdapter: pymilvus library not available. Adapter will use simulation.")
+            logger.warning("MilvusAdapter: pymilvus library not available. Adapter will use simulation.")
             # 라이브러리 없으면 더미 클라이언트 인스턴스 생성 (이전 더미 클래스 사용)
             # 더미 클래스 생성자 시그니처가 실제와 일치하도록 정의했는지 확인하세요.
             self._client = MilvusClient(host=self._host, port=self._port, user=self._user, password=self._password)
             if hasattr(self._client, 'is_connected') and self._client.is_connected():
                 self._is_initialized_successfully = True
-                print("MilvusAdapter: Mock Milvus client initialized and connected.")
+                logger.info("MilvusAdapter: Mock Milvus client initialized and connected.")
             else:
-                 print("MilvusAdapter: Mock client initialization failed or not connected.")
+                 logger.error("MilvusAdapter: Mock client initialization failed or not connected.")
                  # 더미 초기화 실패 시 예외 발생 고려
                  # raise MilvusAdapterError("Failed to initialize mock Milvus client")
 
 
         else: # pymilvus 라이브러리 사용 가능 시 실제 연결 시도
-            print("MilvusAdapter: Attempting to connect to Milvus...")
+            logger.info("MilvusAdapter: Attempting to connect to Milvus...")
             try:
                 # --- ★★★ 실제 Milvus 클라이언트 연결 코드 ★★★ ---
                 # 사용하는 pymilvus 버전에 따라 연결 방식이 다릅니다.
@@ -104,8 +111,7 @@ class MilvusAdapter(VectorDatabasePort):
 
                 # 예시 (pymilvus >= 2.2.0, host/port 방식):
                 self._client = MilvusClient(
-                    host=self._host,
-                    port=self._port,
+                    uri=f"http://{self._host}:{self._port}",
                     user=self._user,
                     password=self._password,
                     # 필요하다면 secure=True, client_timeout 등 파라미터 추가 (pymilvus 문서 확인)
@@ -118,15 +124,15 @@ class MilvusAdapter(VectorDatabasePort):
                 #    Connection.connect(alias="default", host=self._host, port=self._port, user=self._user, password=self._password) # 연결 설정
 
 
-                print("MilvusAdapter: MilvusClient instance created.")
+                logger.info("MilvusAdapter: MilvusClient instance created.")
 
                 # 연결 상태 확인 (필요시 is_connected() 메서드 사용)
                 # is_connected() 메서드가 모든 pymilvus 버전에 있는지 확인하세요.
                 if hasattr(self._client, 'is_connected') and self._client.is_connected():
-                     print("MilvusAdapter: Successfully connected to Milvus.")
+                     logger.info("MilvusAdapter: Successfully connected to Milvus.")
                      self._is_initialized_successfully = True
                 else:
-                    print("MilvusAdapter: Failed to connect to Milvus.")
+                    logger.error("MilvusAdapter: Failed to connect to Milvus.")
                     # 연결 실패 시 MilvusAdapterError 예외 발생
                     raise MilvusAdapterError(f"Failed to connect to Milvus at {host}:{port}")
 
@@ -135,7 +141,7 @@ class MilvusAdapter(VectorDatabasePort):
                 # 데이터를 저장하기 전에 컬렉션이 존재하는지 확인하고 필요하면 생성하거나 로드해야 합니다.
                 # 이 로직은 필수는 아니지만, 앱 시작 시 컬렉션 상태를 확인하는 데 유용합니다.
                 try:
-                     print(f"   Checking collection '{self._collection_name}'...")
+                     logger.info(f"Checking collection '{self._collection_name}'...")
                      # 실제 pymilvus 컬렉션 확인/생성/로드 로직 (pymilvus 문서 확인)
                      # 예시: client.has_collection, client.create_collection, client.load_collection
                      # 예: collection_exists = self._client.has_collection(collection_name=self._collection_name)
@@ -147,13 +153,13 @@ class MilvusAdapter(VectorDatabasePort):
                      # if not self._client.has_collection(collection_name=self._collection_name):
                      #     raise MilvusAdapterError(f"Milvus collection '{self._collection_name}' does not exist.")
 
-                     print(f"   Collection '{self._collection_name}' check/load finished (or will be handled on first save/query).")
+                     logger.info(f"Collection '{self._collection_name}' check/load finished (or will be handled on first save/query).")
                      # 컬렉션 확인/로드 성공 시에도 초기화 성공으로 간주
                      self._is_initialized_successfully = True # 최종 초기화 성공
 
 
                 except Exception as e: # pymilvus 컬렉션 작업 중 발생할 수 있는 예외 처리
-                     print(f"MilvusAdapter: Warning: Error during collection initialization for '{self._collection_name}': {e}")
+                     logger.warning(f"MilvusAdapter: Warning: Error during collection initialization for '{self._collection_name}': {e}")
                      # 컬렉션 관련 오류가 저장에 치명적이라면 여기서 예외 발생 고려
                      # self._client = None # 실패 시 클라이언트 None
                      # raise MilvusAdapterError(f"Error accessing collection '{self._collection_name}': {e}") from e
@@ -162,7 +168,7 @@ class MilvusAdapter(VectorDatabasePort):
 
 
             except Exception as e: # pymilvus 연결 자체 또는 초기 작업 중 발생할 수 있는 예외 처리
-                print(f"MilvusAdapter: Error during Milvus initialization: {e}")
+                logger.error(f"MilvusAdapter: Error during Milvus initialization: {e}")
                 self._client = None # 초기화 실패 시 클라이언트 None
                 self._is_initialized_successfully = False # 초기화 실패 플래그
                 # 초기화 실패 시 MilvusAdapterError 예외 발생
@@ -170,9 +176,9 @@ class MilvusAdapter(VectorDatabasePort):
 
 
         if not self._is_initialized_successfully:
-            print("MilvusAdapter: Milvus client is not available or failed to initialize successfully. Save operations will fail.")
+            logger.warning("MilvusAdapter: Milvus client is not available or failed to initialize successfully. Save operations will fail.")
         else:
-             print("MilvusAdapter: Adapter successfully initialized.")
+             logger.info("MilvusAdapter: Adapter successfully initialized.")
 
 
     # --- save_document_data 메서드 상세 구현 ---
@@ -180,25 +186,25 @@ class MilvusAdapter(VectorDatabasePort):
         """
         문서 청크 목록과 해당하는 임베딩 벡터 목록을 Milvus 컬렉션에 저장합니다.
         """
-        print(f"MilvusAdapter: Saving {len(chunks)} chunks and {len(embeddings)} embeddings to Milvus collection '{self._collection_name}'...")
+        logger.info(f"MilvusAdapter: Saving {len(chunks)} chunks and {len(embeddings)} embeddings to Milvus collection '{self._collection_name}'...")
 
         # 어댑터가 유효하고 초기화 성공했는지 확인
         if not self._is_initialized_successfully or self._client is None:
              # self._client.is_connected()는 매번 호출하기보다 초기화 상태와 클라이언트 존재 여부로 판단
             error_msg = "MilvusAdapter: Adapter not successfully initialized. Cannot save data."
-            print(error_msg)
+            logger.error(error_msg)
             raise MilvusAdapterError(error_msg)
 
 
         # 청크와 임베딩 개수 일치 확인
         if len(chunks) != len(embeddings):
             error_msg = f"MilvusAdapter: Mismatch between number of chunks ({len(chunks)}) and embeddings ({len(embeddings)}). Must be 1:1."
-            print(error_msg)
+            logger.error(error_msg)
             raise MilvusAdapterError(error_msg)
 
         # 저장할 데이터가 없는 경우 처리
         if not chunks:
-            print("MilvusAdapter: No data to save. Skipping Milvus operation.")
+            logger.info("MilvusAdapter: No data to save. Skipping Milvus operation.")
             return # 저장할 데이터가 없으면 바로 반환
 
         # --- 데이터 준비: DocumentChunk/EmbeddingVector -> Milvus 삽입 형식 ---
@@ -223,7 +229,7 @@ class MilvusAdapter(VectorDatabasePort):
 
         entities_to_insert = []
         try:
-            print(f"   Preparing {len(chunks)} entities for Milvus insertion...")
+            logger.info(f"Preparing {len(chunks)} entities for Milvus insertion...")
             for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
                 # 각 엔티티에 필요한 필드 준비
 
@@ -281,11 +287,11 @@ class MilvusAdapter(VectorDatabasePort):
                 }
                 entities_to_insert.append(entity)
 
-            print(f"   Prepared {len(entities_to_insert)} entities for Milvus insertion.")
+            logger.info(f"Prepared {len(entities_to_insert)} entities for Milvus insertion.")
 
         except Exception as e:
             error_msg = f"MilvusAdapter: Error preparing data for Milvus: {e}"
-            print(error_msg)
+            logger.error(error_msg)
             # 데이터 준비 중 오류 발생 시 MilvusAdapterError 예외 발생
             raise MilvusAdapterError(error_msg) from e
 
@@ -297,7 +303,7 @@ class MilvusAdapter(VectorDatabasePort):
         # 사용하는 pymilvus 버전과 MilvusClient 객체 사용 방식에 따라 호출 코드가 다를 수 있습니다.
 
         try:
-            print(f"   Calling self._client.upsert() for collection '{self._collection_name}'...")
+            logger.info(f"Calling self._client.upsert() for collection '{self._collection_name}'...")
             # ★★★ 실제 Milvus 클라이언트 라이브러리 upsert 호출 라인 ★★★
             # self._client 객체를 통해 컬렉션의 upsert/insert 메서드를 호출합니다.
             # 사용하는 pymilvus 버전 문서를 반드시 확인하세요! (예: client.upsert, client.get_collection(...).insert)
@@ -309,28 +315,24 @@ class MilvusAdapter(VectorDatabasePort):
                  # 기타 upsert 메서드가 받는 파라미터 추가 (예: partition_name, consistency_level)
                  # pymilvus 문서 확인 필요
             )
-            print(f"MilvusAdapter: upsert operation completed. Result: {mutation_result}")
+            logger.info(f"MilvusAdapter: upsert operation completed. Result: {mutation_result}")
 
-            # mutation_result 객체에서 삽입/업데이트 성공 여부 확인 및 로깅 (Milvus 문서 확인)
-            # mutation_result는 Dict 또는 MutationResult 객체일 수 있습니다.
-            # 예: if mutation_result and mutation_result.insert_count > 0 or mutation_result.upsert_count > 0:
-            #     print("MilvusAdapter: Data successfully saved.")
-            # 예: elif mutation_result:
-            #      print(f"MilvusAdapter: Upsert operation reported no inserts/updates: {mutation_result}")
-            #      # 이것도 실패로 간주할지 정책 결정 필요
+            # 저장 결과 확인
+            if not mutation_result.insert_count and not mutation_result.upsert_count:
+                logger.warning(f"MilvusAdapter: Upsert operation reported no inserts/updates: {mutation_result}")
 
         except MilvusException as e: # Milvus 라이브러리 특정 예외 처리 (pymilvus.exceptions.MilvusException 등)
             error_msg = f"MilvusAdapter: Milvus operation error during upsert: {e}"
-            print(error_msg)
+            logger.error(error_msg)
             # Milvus 관련 오류 발생 시 어댑터 특정 예외를 발생시켜 유스케이스로 전달
             raise MilvusAdapterError(error_msg) from e
         except Exception as e: # 그 외 upsert 호출 중 발생할 수 있는 예외 처리
             error_msg = f"MilvusAdapter: An unexpected error occurred during Milvus upsert: {e}"
-            print(error_msg)
+            logger.error(error_msg)
             # 예상치 못한 오류 발생 시 MilvusAdapterError 예외 발생
             raise MilvusAdapterError(error_msg) from e
 
-        print(f"MilvusAdapter: Save operation finished for {len(entities_to_insert)} entities.")
+        logger.info(f"MilvusAdapter: Save operation finished for {len(entities_to_insert)} entities.")
 
     # --- 검색 기능 메서드 (RAG 검색 단계 필요시 구현) ---
     # VectorDatabasePort에 search_similar_vectors 메서드가 있다면 여기서 구현합니다.

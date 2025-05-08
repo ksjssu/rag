@@ -1,14 +1,18 @@
 # src/adapters/secondary/env_apikey_adapter.py
 
 import os
+import logging
 from ports.output_ports import ApiKeyManagementPort
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 class EnvApiKeyAdapter(ApiKeyManagementPort):
     """
     환경 변수에서 API 키를 읽어와 ApiKeyManagementPort를 구현하는 어댑터.
     """
     def __init__(self):
-        print("EnvApiKeyAdapter initialized.")
+        logger.info("EnvApiKeyAdapter initialized.")
 
     def get_api_key(self, service_name: str) -> str:
         """
@@ -25,5 +29,5 @@ class EnvApiKeyAdapter(ApiKeyManagementPort):
             # API 키가 없을 경우 예외 발생 (또는 다른 처리)
             raise ValueError(f"API Key for service '{service_name}' not found in environment variable '{env_var_name}'")
 
-        print(f"EnvApiKeyAdapter: Successfully retrieved API key for service '{service_name}'.")
+        logger.info(f"EnvApiKeyAdapter: Successfully retrieved API key for service '{service_name}'.")
         return api_key

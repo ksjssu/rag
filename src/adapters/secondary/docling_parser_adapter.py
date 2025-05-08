@@ -1,88 +1,133 @@
 # src/adapters/secondary/docling_parser_adapter.py
 
+import logging
+import os
+from pathlib import Path
+from typing import Dict, Any, Optional, List, Union
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
 # --- Docling 라이브러리 임포트 ---
-# 실제 설치하신 Docling 라이브러리의 정확한 임포트 구문을 사용하세요.
-# 앞서 제공해주신 코드 기반으로 추정한 임포트입니다.
 try:
     # Docling 파싱을 위한 핵심 클래스 임포트
-    from docling_core.document_converter import DocumentConverter # DocumentConverter 클래스
-    from docling_core.datamodel.base_models import DocumentStream, ConversionStatus, InputFormat # Docling 입력/결과 관련 모델
-    from docling_core.datamodel.document import ConversionResult # Docling 결과 모델
-    from docling_core.datamodel.pipeline_options import PipelineOptions, PdfPipelineOptions # 파이프라인 옵션 예시
+    from docling_core.document_converter import DocumentConverter
+    from docling_core.datamodel.base_models import DocumentStream, ConversionStatus, InputFormat
+    from docling_core.datamodel.document import ConversionResult
+    # --- 파이프라인 옵션 임포트 ---
+    from docling_core.datamodel.pipeline_options import PipelineOptions, PdfPipelineOptions
     # 필요한 다른 Docling 모듈/클래스 임포트 (예외 클래스 등)
     from docling_core.exceptions import ConversionError as DoclingConversionError
     # Docling 자체 유틸리티 함수 임포트 (InputFormat 추정 등에 사용될 수 있음)
     # 예: from docling_core.utils.utils import guess_format_from_extension
 
     _docling_available = True
-    print("Docling core libraries imported successfully.")
+    logger.info("Docling core libraries imported successfully.")
+
 except ImportError:
-    print("Warning: Docling core libraries not found (`docling_core`). DoclingParserAdapter will use fallback decoding.")
+    logger.warning("Warning: Docling core libraries not found (`docling_core`). DoclingParserAdapter will use fallback decoding.")
     _docling_available = False
     # --- Docling 클래스가 없을 경우 에러 방지를 위한 더미 클래스 정의 ---
-    # 실제 Docling 클래스의 시그니처와 최대한 유사하게 정의하여 타입 힌트 에러를 줄입니다.
-    print("   Using dummy Docling classes.")
-    class DocumentConverter:
-         def __init__(self, allowed_formats=None, format_options=None, **kwargs): pass
-         def convert(self, source, headers=None, raises_on_error=True, **kwargs):
-             print("   (Simulating DoclingConverter.convert - Library not available)")
-             class MockDoc: # 더미 내부 문서 객체 (실제 Docling 내부 문서 객체 속성 반영 시도)
-                  def __init__(self, text="", metadata=None): self._text = text; self._metadata = metadata or {}
-                  def export_to_markdown(self): return self._text # PDFLoader 예시 반영
-                  @property
-                  def text(self): return self._text
-                  @property
-                  def metadata(self): return self._metadata or {} # None이 아닌 빈 dict 반환
-                  def get_text(self): return self._text or ""
-                  def get_metadata(self): return self._metadata or {}
-             class MockConvResult: # 더미 ConversionResult
-                 def __init__(self, status, document=None, errors=None, warnings=None):
-                      self.status = status
-                      self.document = document
-                      self.errors = errors or []
-                      self.warnings = warnings or []
-             # Dummy ConversionStatus 사용
-             _MockStatus = type("ConversionStatus", (object,), {'SUCCESS': 'SUCCESS', 'PARTIAL_SUCCESS': 'PARTIAL_SUCCESS', 'FAILURE': 'FAILURE', 'SKIPPED': 'SKIPPED'})
-             # 입력 source에서 내용과 이름 추정하여 더미 문서 객체 생성
-             content_str = ""
-             name = "unknown"
-             if isinstance(source, DocumentStream):
-                  try: content_str = source.data.decode('utf-8', errors='ignore') # bytes->str 임시 변환
-                  except: pass
-                  name = source.name
-             dummy_doc = MockDoc(text=f"Fallback content for {name}", metadata={'original_name': name})
-             # 더미 에러/경고 메시지 추가
-             errors = [f"Docling library not available or failed initialization. Input: {name}"] if not hasattr(self, '_is_initialized_successfully') or not self._is_initialized_successfully else []
-             return MockConvResult(_MockStatus.FAILURE, document=None, errors=errors) # 라이브러리 없으면 무조건 실패 반환
+    logger.info("Using dummy Docling classes.")
 
-    class DocumentStream: # 더미 클래스
-        def __init__(self, data, name, format=None, **kwargs):
-            self.data = data
+    # (Dummy DocumentConverter, Dummy DocumentStream 등 다른 더미 클래스 정의는 그대로 유지)
+
+    # ★★★ 시작: 기존 더미 InputFormat 및 ConversionStatus 클래스 정의 전체와 이 블록 내용으로 교체 ★★★
+
+    # Helper dummy class for InputFormat and ConversionStatus members (to simulate enum-like objects)
+    class _DummyInputFormatMember:
+        def __init__(self, name):
             self.name = name
-            self.format = format
-    # 더미 InputFormat (Docling 코드 기반)
-    class InputFormat:
-        AUTODETECT = "AUTODETECT"; CSV="CSV"; XLSX="XLSX"; DOCX="DOCX"; PPTX="PPTX"; MD="MD"; ASCIIDOC="ASCIIDOC"; HTML="HTML"; XML_USPTO="XML_USPTO"; XML_JATS="XML_JATS"; IMAGE="IMAGE"; PDF="PDF"; JSON_DOCLING="JSON_DOCLING"
-        __members__ = {name: type(name, (object,), {'name': name})() for name in [AUTODETECT, CSV, XLSX, DOCX, PPTX, MD, ASCIIDOC, HTML, XML_USPTO, XML_JATS, IMAGE, PDF, JSON_DOCLING]} # Enum 멤버처럼 보이도록
-        @classmethod
-        def from_extension(cls, ext): # 더미 from_extension
-             ext_upper = ext.lstrip('.').upper()
-             if ext_upper in cls.__members__: return cls.__members__[ext_upper]
-             # 특별 매핑 처리 예시 (Docling 실제 코드 기반)
-             if ext_upper in ['JPG', 'JPEG', 'PNG', 'TIFF'] and 'IMAGE' in cls.__members__: return cls.IMAGE
-             return cls.AUTODETECT
-        def __eq__(self, other): # 비교 가능하도록
-             if isinstance(other, InputFormat): return self.name == other.name
-             if isinstance(other, str): return self.name == other.upper() # 문자열과 비교 가능
+        # Allow comparison with actual InputFormat/Status members or strings like 'PDF' or 'SUCCESS'
+        def __eq__(self, other):
+             if isinstance(other, _DummyInputFormatMember): return self.name == other.name
+             # Allow comparison with uppercase strings
+             if isinstance(other, str): return self.name == other.upper()
+             # If comparing with actual Docling enum members, they might have a .name property
+             if hasattr(other, 'name') and isinstance(getattr(other, 'name'), str): return self.name == getattr(other, 'name').upper()
              return False
-        def __hash__(self): return hash(self.name) # 해시 가능하도록
-        def __str__(self): return self.name # 문자열 표현
-        def __repr__(self): return f"<InputFormat:{self.name}>"
+        def __hash__(self): return hash(self.name) # Hash based on the name string
+        def __str__(self): return self.name
+        def __repr__(self): return f"<DummyStatusOrFormatMember:{self.name}>"
+
+        # Needed for `if status in {SUCCESS, ...}` checks
+        def __iter__(self): yield self # Allow iteration (e.g., when in a set)
+        def __contains__(self, item): return item == self # Allow `in` operator check
 
 
-    # 더미 ConversionResult (위에서 정의된 MockConvResult와 동일)
+    # Revised Dummy InputFormat (using helper class and simpler __members__)
+    class InputFormat:
+        # Define enum-like members using the helper class
+        AUTODETECT = _DummyInputFormatMember('AUTODETECT')
+        CSV = _DummyInputFormatMember('CSV')
+        XLSX = _DummyInputFormatMember('XLSX')
+        DOCX = _DummyInputFormatMember('DOCX')
+        PPTX = _DummyInputFormatMember('PPTX')
+        MD = _DummyInputFormatMember('MD')
+        ASCIIDOC = _DummyInputFormatMember('ASCIIDOC')
+        HTML = _DummyInputFormatMember('HTML')
+        XML_USPTO = _DummyInputFormatMember('XML_USPTO')
+        XML_JATS = _DummyInputFormatMember('XML_JATS')
+        IMAGE = _DummyInputFormatMember('IMAGE')
+        PDF = _DummyInputFormatMember('PDF')
+        JSON_DOCLING = _DummyInputFormatMember('JSON_DOCLING')
+
+        # Define __members__ dictionary mapping *string names* to the member objects
+        # Use a standard dictionary comprehension after members are defined
+        __members__ = {
+            'AUTODETECT': AUTODETECT, 'CSV': CSV, 'XLSX': XLSX, 'DOCX': DOCX, 'PPTX': PPTX,
+            'MD': MD, 'ASCIIDOC': ASCIIDOC, 'HTML': HTML, 'XML_USPTO': XML_USPTO, 'XML_JATS': XML_JATS,
+            'IMAGE': IMAGE, 'PDF': PDF, 'JSON_DOCLING': JSON_DOCLING
+        }
+
+        @classmethod
+        def from_extension(cls, ext):
+             ext_upper = ext.lstrip('.').upper()
+             # Look up directly in the __members__ dictionary using the uppercase extension
+             if ext_upper in cls.__members__: return cls.__members__[ext_upper]
+             # Special mapping based on __members__ values
+             # Access members via __members__ dictionary lookup
+             if ext_upper in ['JPG', 'JPEG', 'PNG', 'TIFF'] and 'IMAGE' in cls.__members__: return cls.__members__['IMAGE']
+             return cls.AUTODETECT if 'AUTODETECT' in cls.__members__ else None # Return dummy object value
+
+        # Add __getitem__ to allow dictionary-style access if needed elsewhere (e.g., InputFormat['PDF'])
+        @classmethod
+        def __getitem__(cls, name):
+            name_upper = name.upper() # Allow case-insensitive access
+            if name_upper in cls.__members__: return cls.__members__[name_upper]
+            raise KeyError(f"'{name}' is not a valid dummy InputFormat member.")
+
+
+    # Revised Dummy ConversionStatus enum (using helper class and simpler __members__)
+    class ConversionStatus:
+        SUCCESS = _DummyInputFormatMember('SUCCESS')
+        PARTIAL_SUCCESS = _DummyInputFormatMember('PARTIAL_SUCCESS')
+        FAILURE = _DummyInputFormatMember('FAILURE')
+        SKIPPED = _DummyInputFormatMember('SKIPPED')
+        # Define __members__ dictionary mapping *string names* to the member objects
+        __members__ = {
+            'SUCCESS': SUCCESS, 'PARTIAL_SUCCESS': PARTIAL_SUCCESS,
+            'FAILURE': FAILURE, 'SKIPPED': SKIPPED
+        }
+        # Add __getitem__ for dictionary-style access if needed elsewhere
+        @classmethod
+        def __getitem__(cls, name):
+            name_upper = name.upper()
+            if name_upper in cls.__members__: return cls.__members__[name_upper]
+            raise KeyError(f"'{name}' is not a valid dummy ConversionStatus member.")
+
+        # Needed for `if status in {SUCCESS, ...}` checks (handled by _DummyInputFormatMember)
+        # @property
+        # def name(self): return self._name # Handled by _DummyInputFormatMember.name
+
+
+    # Dummy ConversionResult
     class ConversionResult:
-         def __init__(self, status, document=None, errors=None, warnings=None): self.status=status; self.document=document; self.errors=errors or []; self.warnings=warnings or []
+         def __init__(self, status, document=None, errors=None, warnings=None):
+              self.status = status
+              self.document = document
+              self.errors = errors or []
+              self.warnings = warnings or []
          @property
          def status(self): return self._status
          @status.setter
@@ -92,12 +137,19 @@ except ImportError:
          @document.setter
          def document(self, value): self._document = value
 
-    # 더미 ConversionStatus enum
-    class ConversionStatus:
-        SUCCESS = "SUCCESS"; PARTIAL_SUCCESS = "PARTIAL_SUCCESS"; FAILURE = "FAILURE"; SKIPPED = "SKIPPED"
+
+    # Dummy PipelineOptions and PdfPipelineOptions
+    class PipelineOptions: pass
+    class PdfPipelineOptions: pass
+
+    # Dummy DoclingConversionError (needs to inherit from Exception)
+    class DoclingConversionError(Exception): pass
+
+    # Dummy guess_format_from_extension function if it's called directly (not used in current parse method)
+    # def guess_format_from_extension(filename): return InputFormat.AUTODETECT # Simplified dummy
 
 
-    class DoclingConversionError(Exception): pass # 더미 예외
+    # ★★★ 끝: 기존 더미 InputFormat 및 ConversionStatus 클래스 정의 전체와 이 블록 내용으로 교체 ★★★
 
 
 # --- 어댑터 특정 예외 정의 ---
@@ -105,6 +157,8 @@ except ImportError:
 class ParsingError(Exception):
     """Represents an error during the document parsing process."""
     pass
+
+# ... (나머지 DoclingParserAdapter 클래스 코드 계속) ...
 
 
 import os
@@ -166,14 +220,14 @@ class DoclingParserAdapter(DocumentParsingPort):
                       # 더미 클래스 사용 예시
                       if 'PDF' in InputFormat.__members__:
                           format_options_dict[InputFormat.PDF] = DummyPdfFormatOption(pipeline_options=self._pdf_options)
-                          print("   (Added PDF options to format_options_dict using dummy classes)")
+                          logger.info("Added PDF options to format_options_dict using dummy classes")
                  except Exception as e:
-                      print(f"Warning: Could not configure PDF options for DoclingConverter: {e}")
+                      logger.warning(f"Could not configure PDF options for DoclingConverter: {e}")
 
 
         if _docling_available:
             self._is_initialized_successfully = False # 초기화 성공 여부 플래그
-            print("DoclingParserAdapter: Initializing Docling DocumentConverter...")
+            logger.info("DoclingParserAdapter: Initializing Docling DocumentConverter...")
             try:
                  # --- Docling InputFormat 설정 (allowed_formats 처리) ---
                  # allowed_formats 문자열 목록을 Docling InputFormat enum으로 변환
@@ -185,7 +239,7 @@ class DoclingParserAdapter(DocumentParsingPort):
                           if fmt_upper in InputFormat.__members__:
                               self._allowed_docling_formats.append(InputFormat[fmt_upper])
                           else:
-                              print(f"Warning: Specified allowed_format '{fmt_str}' is not a valid Docling InputFormat.")
+                              logger.warning(f"Specified allowed_format '{fmt_str}' is not a valid Docling InputFormat.")
 
 
                  # --- Docling DocumentConverter 인스턴스 생성 ★ 실제 초기화 ★ ---
@@ -199,16 +253,16 @@ class DoclingParserAdapter(DocumentParsingPort):
                      # 기타 Docling Converter 생성자가 받는 파라미터 추가 (Docling 문서 확인)
                  )
                  self._is_initialized_successfully = True # 초기화 성공
-                 print("DoclingParserAdapter: Docling DocumentConverter initialized successfully.")
+                 logger.info("DoclingParserAdapter: Docling DocumentConverter initialized successfully.")
             except Exception as e: # Docling Converter 초기화 중 발생할 수 있는 예외 처리
-                print(f"Error initializing Docling DocumentConverter: {e}")
+                logger.error(f"DoclingParserAdapter: Failed to initialize DocumentConverter: {e}")
                 self._converter = None # 초기화 실패 시 None으로 설정
                 # 초기화 실패 시 ParsingError 예외를 발생시켜 앱 시작 중단 고려
                 # raise ParsingError(f"Failed to initialize Docling Converter: {e}") from e
 
 
         if self._converter is None:
-             print("DoclingParserAdapter: Docling Converter not available or failed to initialize. Will use fallback decoding.")
+             logger.warning("DoclingParserAdapter: Docling Converter not available or failed to initialize. Will use fallback decoding.")
 
 
     # --- Helper 메서드 ---
@@ -237,7 +291,7 @@ class DoclingParserAdapter(DocumentParsingPort):
                  # 다른 예외적인 매핑이 있다면 여기에 추가 (Docling 문서 확인)
 
              except Exception as e: # Docling 유틸리티 사용 중 오류 발생 시
-                 print(f"Warning: Error guessing Docling InputFormat using utility: {e}. Falling back to manual guess.")
+                 logger.warning(f"Warning: Error guessing Docling InputFormat using utility: {e}. Falling back to manual guess.")
                  pass # 폴백 로직으로 이동
 
 
@@ -264,177 +318,44 @@ class DoclingParserAdapter(DocumentParsingPort):
         """
         RawDocument를 Docling DocumentConverter로 파싱합니다.
         """
-        print(f"DoclingParserAdapter: Parsing document {raw_document.metadata.get('filename', 'untitled')}...")
+        logger.info(f"DoclingParserAdapter: Starting document parsing for {raw_document.metadata.get('filename', 'unknown')}")
 
-        parsed_content = ""
-        extracted_metadata = raw_document.metadata.copy()
-        docling_internal_document = None # Docling 파싱 결과 객체 (conversion_result.document) 저장 변수
-        parsing_success = False # 파싱 성공 여부 플래그 (Docling 처리 결과 기준)
+        if not raw_document.content:
+            logger.warning("DoclingParserAdapter: Empty document content received")
+            return ParsedDocument(content="", metadata=raw_document.metadata)
 
+        if not _docling_available or not self._converter:
+            logger.warning("DoclingParserAdapter: Using fallback parsing (Docling not available)")
+            return ParsedDocument(content=raw_document.content, metadata=raw_document.metadata)
 
-        # Docling Converter가 유효하고 초기화 성공했다면 실제 파싱 실행
-        if self._converter is not None:
-            print("DoclingParserAdapter: Using configured Docling Converter.")
-            try:
-                # --- 1단계: RawDocument의 내용을 Docling 라이브러리가 받는 입력 형식으로 변환 ---
-                # 제공된 Docling 코드에 DocumentStream 클래스가 있고 convert 메서드가 받으므로 사용
-                # DocumentStream 생성자/사용법은 Docling 문서를 확인해야 합니다.
-                # data (bytes), name (filename), format (InputFormat enum) 등을 받을 수 있습니다.
-                print("   Preparing input for Docling DocumentConverter...")
-                doc_format = self._guess_input_format(raw_document.metadata) # 포맷 추정
+        try:
+            input_format = self._guess_input_format(raw_document.metadata)
+            if not input_format:
+                logger.warning("DoclingParserAdapter: Could not determine input format, using AUTODETECT")
+                input_format = InputFormat.AUTODETECT
 
-                doc_stream = DocumentStream( # <--- Docling 라이브러리의 DocumentStream 클래스 사용
-                     data=raw_document.content,
-                     name=raw_document.metadata.get('filename', 'file'), # 파일명 전달 (Docling이 이것으로 형식 추정할 수 있음)
-                     format=doc_format, # 추정한 포맷을 명시적으로 전달 (Docling 문서 확인, 자동 감지 우선 시 None)
-                     # 기타 DocumentStream이 받는 파라미터 추가 (Docling 문서 확인)
+            logger.info(f"DoclingParserAdapter: Converting document with format {input_format}")
+            result = self._converter.convert(
+                content=raw_document.content,
+                input_format=input_format,
+                metadata=raw_document.metadata
+            )
+
+            if result.status == ConversionStatus.SUCCESS:
+                logger.info("DoclingParserAdapter: Document conversion successful")
+                return ParsedDocument(
+                    content=result.document.content,
+                    metadata=raw_document.metadata
                 )
-                print(f"   Prepared DocumentStream (name='{doc_stream.name}', format='{doc_stream.format}')")
+            else:
+                logger.error(f"DoclingParserAdapter: Document conversion failed with status {result.status}")
+                if result.errors:
+                    logger.error(f"Conversion errors: {result.errors}")
+                raise ParsingError(f"Document conversion failed: {result.status}")
 
-                # --- ★★★ 2단계: 실제 Docling 라이브러리 파싱 기능을 호출하는 부분 ★★★ ---
-                print("   Calling self._converter.convert()...")
-                # self._converter는 __init__에서 생성한 DocumentConverter 인스턴스
-                # .convert() 메서드는 Docling 라이브러리의 핵심 파싱 메서드
-                # source 파라미터에 준비한 DocumentStream 객체를 전달
-                # PDFLoader 예시처럼 headers 등 다른 파라미터도 전달 가능
-                # raises_on_error=False로 설정하면 예외 대신 ConversionResult에 오류가 담겨 반환됩니다.
-                # 어댑터가 오류를 명시적으로 처리하기 위해 False가 유리합니다.
-                conversion_result: ConversionResult = self._converter.convert( # <--- ▶︎▶︎▶︎ 실제 호출 라인! ◀︎◀︎◀︎
-                    source=doc_stream,
-                    headers=raw_document.metadata.get('headers'),
-                    raises_on_error=False, # 어댑터가 직접 결과를 보고 판단하도록 설정
-                    # max_num_pages, max_file_size, page_range 등 (필요시 Docling 문서 확인)
-                    # Docling convert 메서드가 받는 다른 파라미터 추가 (Docling 문서 확인)
-                )
-                # --- 호출 결과는 Docling의 ConversionResult 객체입니다. ---
-                print(f"   Received ConversionResult with status: {conversion_result.status.name}")
-
-
-                # --- 3단계: Docling 파싱 결과(ConversionResult)를 받아서 처리 ---
-                print("   Processing Docling ConversionResult...")
-                # 반환된 ConversionResult 객체의 상태를 확인하고 필요한 데이터(파싱된 텍스트, 메타데이터)를 추출합니다.
-
-                if conversion_result.status in {ConversionStatus.SUCCESS, ConversionStatus.PARTIAL_SUCCESS}:
-                    parsing_success = True # 파싱 성공 (부분 성공 포함)
-                    # 파싱 성공/부분 성공 시 Docling 내부 문서 객체 접근
-                    docling_internal_document = conversion_result.document # <--- ConversionResult에서 문서 객체 얻기
-
-                    if docling_internal_document:
-                        # --- Docling 내부 문서 객체에서 필요한 데이터 추출 (Docling 문서 확인) ---
-                        # 제공된 PDFLoader 예시에서 .export_to_markdown()을 사용하여 텍스트를 얻었음을 확인
-                        # 다른 메타데이터는 .metadata 속성 등을 추정 (Docling 문서 확인 필요)
-                        print("   Extracting text and metadata from Docling internal document...")
-                        # 텍스트 추출: .export_to_markdown() 또는 .text 속성/get_text() 메서드
-                        # Docling 문서에서 정확한 방법을 확인하세요. 우선순위 부여
-                        extracted_text = ""
-                        if hasattr(docling_internal_document, 'export_to_markdown'):
-                             # PDFLoader 예제 기반: export_to_markdown 사용 (마크다운 형태)
-                             extracted_text = docling_internal_document.export_to_markdown() or ""
-                             print("   (Extracted text using export_to_markdown)")
-                        elif hasattr(docling_internal_document, 'text') and isinstance(docling_internal_document.text, str):
-                             # .text 속성이 있다면 사용 (일반 텍스트일 가능성)
-                             extracted_text = docling_internal_document.text
-                             print("   (Extracted text using .text attribute)")
-                        elif hasattr(docling_internal_document, 'get_text'):
-                             # get_text() 메서드가 있다면 사용
-                             extracted_text = docling_internal_document.get_text() or ""
-                             print("   (Extracted text using .get_text() method)")
-                        else:
-                             print("   (Docling document has no recognizable text extraction method/attribute)")
-
-
-                        # 메타데이터 추출 (Docling 문서에서 Docling 내부 문서 객체의 속성/메서드 확인)
-                        # 예: .metadata 속성, .get_metadata() 메서드 등
-                        extracted_docling_metadata = {}
-                        if hasattr(docling_internal_document, 'metadata') and isinstance(docling_internal_document.metadata, dict):
-                              extracted_docling_metadata = docling_internal_document.metadata
-                              print("   (Extracted metadata using .metadata attribute)")
-                        elif hasattr(docling_internal_document, 'get_metadata'):
-                              extracted_docling_metadata = docling_internal_document.get_metadata() or {}
-                              print("   (Extracted metadata using .get_metadata())")
-                        else:
-                              print("   (Docling document has no .metadata attribute or .get_metadata() method)")
-
-                        # 원본 메타데이터에 Docling에서 추출된 메타데이터 병합
-                        # Docling 메타데이터가 원본 메타데이터를 덮어쓸 수 있습니다. 정책 결정 필요.
-                        extracted_metadata.update(extracted_docling_metadata)
-                        # Docling 결과에 포함된 오류/경고 정보도 메타데이터에 추가하는 것이 좋습니다.
-                        if conversion_result.errors: extracted_metadata['docling_errors'] = [str(e) for e in conversion_result.errors]
-                        if conversion_result.warnings: extracted_metadata['docling_warnings'] = [str(w) for w in conversion_result.warnings]
-
-                        print("   Docling parsing successfully processed.")
-                        parsed_content = extracted_text # 추출한 텍스트를 최종 parsed_content로 사용
-
-
-                    else: # Status indicates success/partial success but document is None? (가능성은 낮으나 발생 시)
-                         print(f"   Warning: Docling status {conversion_result.status.name} but document object is None.")
-                         parsed_content = "" # 문서 객체가 없으면 내용도 없음
-                         extracted_metadata['docling_status'] = conversion_result.status.name
-                         if conversion_result.errors: extracted_metadata['docling_errors'] = [str(e) for e in conversion_result.errors]
-                         # 여기서 파싱 실패로 간주하고 예외를 발생시킬지 결정
-                         parsing_success = False
-
-
-                else: # Docling 파싱 실패 상태 (ConversionStatus.FAILURE, SKIPPED 등)
-                    parsing_success = False
-                    print(f"   Docling parsing failed with status: {conversion_result.status.name}")
-                    parsed_content = f"Docling parsing failed. Status: {conversion_result.status.name}"
-                    extracted_metadata['docling_status'] = conversion_result.status.name
-                    if conversion_result.errors:
-                         extracted_metadata['docling_errors'] = [str(e) for e in conversion_result.errors]
-                         parsed_content += f" Errors: {[str(e) for e in conversion_result.errors]}"
-                    docling_internal_document = None # 실패했으므로 내부 객체 없음
-
-                # Docling 파싱이 최종적으로 성공하지 않았다면 (status == FAILURE/SKIPPED 또는 document is None 등)
-                # 어댑터 레벨의 ParsingError를 발생시켜 유스케이스에게 알립니다.
-                if not parsing_success:
-                     error_detail = extracted_metadata.get('docling_errors', [f"Status: {conversion_result.status.name}"])
-                     error_message = f"Docling parsing failed for {raw_document.metadata.get('filename')}: {'. '.join(error_detail)}"
-                     print(f"DoclingParserAdapter: Raising ParsingError: {error_message}")
-                     raise ParsingError(error_message)
-
-
-            except DoclingConversionError as e:
-                 # Docling 라이브러리에서 정의한 특정 예외 처리
-                 print(f"DoclingParserAdapter: Docling ConversionError occurred - {e}")
-                 # 어댑터 레벨의 ParsingError로 변환하여 다시 발생
-                 raise ParsingError(f"Docling conversion error for {raw_document.metadata.get('filename')}: {e}") from e
-            except Exception as e:
-                 # Docling 호출 중 발생할 수 있는 예상치 못한 다른 예외 처리
-                 print(f"DoclingParserAdapter: An unexpected error occurred during Docling call - {e}")
-                 # 어댑터 레벨의 ParsingError로 변환하여 다시 발생
-                 raise ParsingError(f"Unexpected error during Docling parsing for {raw_document.metadata.get('filename')}: {e}") from e
-
-
-        else: # self._converter가 None인 경우 (Docling 라이브러리 임포트/초기화 실패 등)
-            # Docling 라이브러리가 없거나 사용 불가능할 때의 폴백 로직
-            print("DoclingParserAdapter: Using fallback simple decoding (Docling Converter not available or failed to initialize).")
-            try:
-                parsed_content = raw_document.content.decode('utf-8', errors='replace')
-                # 폴백 사용 시 Docling 내부 객체는 당연히 없음
-                docling_internal_document = None
-                parsing_success = True # 폴백은 일단 성공으로 간주
-                print("   Fallback decoding successful.")
-            except Exception as e:
-                print(f"DoclingParserAdapter: Fallback decoding failed - {e}")
-                parsed_content = f"Error decoding document content using fallback: {e}"
-                docling_internal_document = None
-                parsing_success = False # 폴백 실패
-                # 폴백마저 실패 시 ParsingError를 발생시킬지 결정
-                raise ParsingError(f"Fallback parsing failed for {raw_document.metadata.get('filename')}: {e}") from e
-
-
-        print("DoclingParserAdapter: Parsing process finished.")
-
-        # --- ★★★ 4단계: 추출한 결과와 내부 객체를 ParsedDocument 도메인 모델에 담아 반환 ★★★ ---
-        # 어댑터의 역할: 외부 기술 결과를 내부 도메인 모델로 변환하여 반환
-        # 청킹 어댑터가 Docling 내부 문서 객체를 필요로 하므로 메타데이터에 담아서 전달합니다.
-        # Docling 내부 객체가 None이더라도 일단 담아서 전달합니다. (청킹 어댑터에서 None 체크)
-        # 원본 메타데이터를 기본으로 하고, Docling 파싱에서 얻은 메타데이터를 업데이트합니다.
-        # Docling 내부 객체도 메타데이터에 추가합니다.
-        final_metadata = raw_document.metadata.copy()
-        final_metadata.update(extracted_metadata) # 파싱 중 추출/병합된 메타데이터 추가
-        final_metadata['__internal_docling_document__'] = docling_internal_document # 내부 객체 추가
-
-
-        return ParsedDocument(content=parsed_content, metadata=final_metadata)
+        except DoclingConversionError as e:
+            logger.error(f"DoclingParserAdapter: Docling conversion error: {e}")
+            raise ParsingError(f"Docling conversion failed: {e}") from e
+        except Exception as e:
+            logger.error(f"DoclingParserAdapter: Unexpected error during parsing: {e}")
+            raise ParsingError(f"Unexpected error during parsing: {e}") from e

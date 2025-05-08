@@ -1,7 +1,11 @@
 # src/adapters/primary/api_adapter.py
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, status, Depends
-from typing import List
+from typing import List, Dict, Any
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 # 도메인 모델 임포트 (domain/models.py 에 정의될 모델)
 # RawDocument는 외부 입력을 애플리케이션 모델로 변환할 때 사용됩니다.
@@ -96,7 +100,7 @@ def setup_api_routes(input_port: DocumentProcessingInputPort) -> APIRouter:
             # 처리 중 발생한 예외를 잡아서 적절한 HTTP 오류 응답으로 변환합니다.
             # 실제 시스템에서는 예외의 종류에 따라 더 세분화된 HTTP 상태 코드를 반환해야 합니다.
             # (예: 데이터 유효성 오류 -> 422, 권한 오류 -> 403, 찾을 수 없음 -> 404 등)
-            print(f"Error during document ingestion: {e}") # 서버 로그에 오류 상세 기록
+            logger.error(f"Error during document ingestion: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, # 일반적인 서버 내부 오류 상태 코드
                 detail=f"Failed to process document due to an internal error: {e}" # 오류 상세 메시지 (디버깅용 또는 사용자용)
