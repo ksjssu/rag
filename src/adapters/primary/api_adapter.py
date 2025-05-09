@@ -90,12 +90,20 @@ def setup_api_routes(input_port: DocumentProcessingInputPort) -> APIRouter:
             # 2. 변환된 도메인 모델을 애플리케이션 코어의 입력 포트를 통해 전달하여
             #    문서 처리 프로세스(파싱 -> 청킹 -> ...)를 실행하도록 요청합니다.
             #    setup_api_routes 함수를 사용한 경우, input_port는 함수의 인자로 이미 전달받은 상태입니다.
-            processed_chunks = input_port.execute(raw_document)
+            processed_result = input_port.execute(raw_document)
 
             # 3. 애플리케이션 코어로부터 반환된 결과(List[DocumentChunk])를
             #    외부 클라이언트에게 응답할 형식으로 변환합니다.
             #    FastAPI의 response_model=List[DocumentChunk] 설정이 이 변환(파이단틱 모델 직렬화)을 자동으로 처리해 줍니다.
-            return processed_chunks
+            return {
+                "status": "success",
+                "file_info": {
+                    "filename": file.filename,
+                    "content_type": file.content_type
+                },
+                "parsing_results": processed_result.metadata.get('api_response', {}),
+                "chunks_count": len(processed_result) if isinstance(processed_result, list) else 0
+            }
 
         except Exception as e:
             # 처리 중 발생한 예외를 잡아서 적절한 HTTP 오류 응답으로 변환합니다.

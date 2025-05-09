@@ -7,6 +7,8 @@ from typing import Dict, Any, Optional, List, Union
 import sys
 import tempfile
 import re
+from dataclasses import dataclass, field
+from enum import Enum
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -82,28 +84,35 @@ except ImportError as e: # 임포트 실패 시 발생하는 예외 메시지를
 
 
     # Revised Dummy InputFormat (using helper class and simpler __members__)
-    class InputFormat:
-        # Define enum-like members using the helper class
-        AUTODETECT = _DummyInputFormatMember('AUTODETECT')
-        CSV = _DummyInputFormatMember('CSV')
-        XLSX = _DummyInputFormatMember('XLSX')
-        DOCX = _DummyInputFormatMember('DOCX')
-        PPTX = _DummyInputFormatMember('PPTX')
-        MD = _DummyInputFormatMember('MD')
-        ASCIIDOC = _DummyInputFormatMember('ASCIIDOC')
-        HTML = _DummyInputFormatMember('HTML')
-        XML_USPTO = _DummyInputFormatMember('XML_USPTO')
-        XML_JATS = _DummyInputFormatMember('XML_JATS')
-        IMAGE = _DummyInputFormatMember('IMAGE')
-        PDF = _DummyInputFormatMember('PDF')
-        JSON_DOCLING = _DummyInputFormatMember('JSON_DOCLING')
+    class InputFormat(str, Enum):
+        """A document format supported by document backend parsers."""
+        DOCX = "docx"
+        PPTX = "pptx"
+        HTML = "html"
+        IMAGE = "image"
+        PDF = "pdf"
+        ASCIIDOC = "asciidoc"
+        MD = "md"
+        CSV = "csv"
+        XLSX = "xlsx"
+        XML_USPTO = "xml_uspto"
+        XML_JATS = "xml_jats"
+        JSON_DOCLING = "json_docling"
 
-        # Define __members__ dictionary mapping *string names* to the member objects
-        # Use a standard dictionary comprehension after members are defined
+        # __members__ 딕셔너리 업데이트 (UNKNOWN 제거)
         __members__ = {
-            'AUTODETECT': AUTODETECT, 'CSV': CSV, 'XLSX': XLSX, 'DOCX': DOCX, 'PPTX': PPTX,
-            'MD': MD, 'ASCIIDOC': ASCIIDOC, 'HTML': HTML, 'XML_USPTO': XML_USPTO, 'XML_JATS': XML_JATS,
-            'IMAGE': IMAGE, 'PDF': PDF, 'JSON_DOCLING': JSON_DOCLING
+            'DOCX': DOCX,
+            'PPTX': PPTX,
+            'HTML': HTML,
+            'IMAGE': IMAGE,
+            'PDF': PDF,
+            'ASCIIDOC': ASCIIDOC,
+            'MD': MD,
+            'CSV': CSV,
+            'XLSX': XLSX,
+            'XML_USPTO': XML_USPTO,
+            'XML_JATS': XML_JATS,
+            'JSON_DOCLING': JSON_DOCLING
         }
 
         @classmethod
@@ -114,7 +123,7 @@ except ImportError as e: # 임포트 실패 시 발생하는 예외 메시지를
              # Special mapping based on __members__ values
              # Access members via __members__ dictionary lookup
              if ext_upper in ['JPG', 'JPEG', 'PNG', 'TIFF'] and 'IMAGE' in cls.__members__: return cls.__members__['IMAGE']
-             return cls.AUTODETECT if 'AUTODETECT' in cls.__members__ else None # Return dummy object value
+             return cls.UNKNOWN if 'UNKNOWN' in cls.__members__ else None # Return dummy object value
 
         # Add __getitem__ to allow dictionary-style access if needed elsewhere (e.g., InputFormat['PDF'])
         @classmethod
@@ -194,7 +203,51 @@ from typing import Dict, Any, Optional, List, Union # Union 임포트
 from pathlib import Path # 파일 확장자 추출에 사용
 
 # src/adapters/secondary/docling_parser_adapter.py 파일 상단에 추가
-DOCLING_ALLOWED_FORMATS = ["pdf", "docx", "xlsx", "pptx", "jpg", "png"]
+DOCLING_ALLOWED_FORMATS = [
+    "pdf", "docx", "xlsx", "pptx",
+    "html", "md", "csv",
+    "jpg", "jpeg", "png", "tif", "tiff", "bmp",
+    "adoc", "xml", "json"
+]
+
+@dataclass
+class ParsedDocument:
+    """
+    파싱 과정을 거쳐 텍스트 추출 및 기본 구조 정보가 포함된 문서 모델.
+    """
+    content: str  # 추출된 텍스트 내용
+    metadata: Dict[str, Any] = field(default_factory=dict)  # 원본 메타데이터 + 파싱 중 얻은 메타데이터
+    
+    # 구조화된 콘텐츠
+    tables: List[Dict[str, Any]] = field(default_factory=list)  # 테이블 구조 정보
+    images: List[Dict[str, Any]] = field(default_factory=list)  # 이미지 정보
+    equations: List[Dict[str, Any]] = field(default_factory=list)  # 수식 정보
+    code_blocks: List[Dict[str, Any]] = field(default_factory=list)  # 코드 블록 정보
+    
+    # 문서 구조 정보
+    headings: List[Dict[str, Any]] = field(default_factory=list)  # 제목 구조
+    paragraphs: List[Dict[str, Any]] = field(default_factory=list)  # 단락 정보
+    lists: List[Dict[str, Any]] = field(default_factory=list)  # 목록 정보
+    
+    # 레이아웃 정보
+    layout: Optional[Dict[str, Any]] = None  # 페이지 레이아웃 정보
+    page_info: List[Dict[str, Any]] = field(default_factory=list)  # 페이지별 정보
+    
+    # OCR 관련 정보
+    ocr_results: Optional[Dict[str, Any]] = None  # OCR 결과 정보
+    ocr_confidence: Optional[float] = None  # OCR 신뢰도
+    
+    # 이미지 처리 결과
+    image_classifications: List[Dict[str, Any]] = field(default_factory=list)  # 이미지 분류 결과
+    image_descriptions: List[Dict[str, Any]] = field(default_factory=list)  # 이미지 설명 결과
+    
+    # 테이블 처리 결과
+    table_structures: List[Dict[str, Any]] = field(default_factory=list)  # 테이블 구조 분석 결과
+    table_cell_matches: List[Dict[str, Any]] = field(default_factory=list)  # 테이블 셀 매칭 결과
+    
+    # 코드 및 수식 처리 결과
+    code_enrichments: List[Dict[str, Any]] = field(default_factory=list)  # 코드 보강 정보
+    formula_enrichments: List[Dict[str, Any]] = field(default_factory=list)  # 수식 보강 정보
 
 class DoclingParserAdapter(DocumentParsingPort):
     """
@@ -268,8 +321,12 @@ class DoclingParserAdapter(DocumentParsingPort):
                       self._allowed_docling_formats = []
                       for fmt_str in allowed_formats:
                           fmt_upper = fmt_str.upper()
-                          # Docling InputFormat.__members__에 있는지 확인하여 유효한 것만 추가
-                          if fmt_upper in InputFormat.__members__:
+                          # 이미지 확장자 처리
+                          if fmt_upper in ['JPG', 'JPEG', 'PNG', 'TIF', 'TIFF', 'BMP']:
+                              if InputFormat.IMAGE not in self._allowed_docling_formats:
+                                  self._allowed_docling_formats.append(InputFormat.IMAGE)
+                          # 다른 포맷 처리
+                          elif fmt_upper in InputFormat.__members__:
                               self._allowed_docling_formats.append(InputFormat[fmt_upper])
                           else:
                               logger.warning(f"Specified allowed_format '{fmt_str}' is not a valid Docling InputFormat.")
@@ -299,59 +356,54 @@ class DoclingParserAdapter(DocumentParsingPort):
 
 
     # --- Helper 메서드 ---
-    def _guess_input_format(self, metadata: Dict[str, Any]) -> Optional[InputFormat]:
-        """메타데이터에서 파일 확장자를 기반으로 Docling InputFormat을 추정합니다."""
-        filename = metadata.get("filename", "")
-        if not filename:
-             return None # 파일명이 없으면 형식 추정 불가
-
-        ext = Path(filename).suffix.lstrip('.').upper()
-
-        # Docling InputFormat enum 멤버 이름을 순회하며 확장자와 일치하는지 확인
-        # 제공된 코드의 _get_default_option 함수를 보면 확장자와 InputFormat 이름이 유사함을 알 수 있습니다.
-        # 예: '.pdf' -> 'PDF', '.docx' -> 'DOCX'
-        # 실제 Docling의 InputFormat.from_extension 또는 유사한 유틸리티 함수가 있다면 그것을 사용하는 것이 가장 정확하고 안전합니다.
-        if _docling_available:
-             try:
-                 # Docling 자체 유틸리티 사용 시도 (from_extension 메서드가 있다고 가정)
-                 if hasattr(InputFormat, 'from_extension') and callable(InputFormat.from_extension):
-                     return InputFormat.from_extension(ext)
-                 # Docling InputFormat.__members__ 직접 접근 시도 (덜 안전)
-                 if ext in InputFormat.__members__:
-                     return InputFormat[ext]
-                 if ext in ['JPG', 'JPEG', 'PNG', 'TIFF'] and 'IMAGE' in InputFormat.__members__:
-                     return InputFormat.IMAGE
-                 # 다른 예외적인 매핑이 있다면 여기에 추가 (Docling 문서 확인)
-
-             except Exception as e: # Docling 유틸리티 사용 중 오류 발생 시
-                 logger.warning(f"Warning: Error guessing Docling InputFormat using utility: {e}. Falling back to manual guess.")
-                 pass # 폴백 로직으로 이동
-
-
-        # Docling 유틸리티가 없거나 실패 시 수동 매핑 시도 (정확하지 않을 수 있음)
-        # InputFormat.__members__를 직접 사용하는 것은 Docling 버전에 따라 위험할 수 있습니다.
-        # 가능한 Docling 자체의 포맷 추정 기능을 사용하거나, 명확한 매핑 테이블을 직접 만드는 것이 좋습니다.
-        manual_mapping = {
-            'PDF': InputFormat.PDF, 'DOCX': InputFormat.DOCX, 'XLSX': InputFormat.XLSX, 'PPTX': InputFormat.PPTX,
-            'MD': InputFormat.MD, 'ASCIIDOC': InputFormat.ASCIIDOC, 'HTML': InputFormat.HTML,
-            'CSV': InputFormat.CSV,
-            'JPG': InputFormat.IMAGE, 'JPEG': InputFormat.IMAGE, 'PNG': InputFormat.IMAGE, 'TIFF': InputFormat.IMAGE,
-            # 기타 필요한 매핑 추가
+    def _guess_input_format(self, filename: str) -> Optional[InputFormat]:
+        """파일 확장자를 기반으로 InputFormat을 추측합니다."""
+        ext = filename.lower().split('.')[-1]
+        
+        format_map = {
+            'docx': InputFormat.DOCX,
+            'dotx': InputFormat.DOCX,
+            'docm': InputFormat.DOCX,
+            'dotm': InputFormat.DOCX,
+            'pptx': InputFormat.PPTX,
+            'potx': InputFormat.PPTX,
+            'ppsx': InputFormat.PPTX,
+            'pptm': InputFormat.PPTX,
+            'potm': InputFormat.PPTX,
+            'ppsm': InputFormat.PPTX,
+            'pdf': InputFormat.PDF,
+            'md': InputFormat.MD,
+            'html': InputFormat.HTML,
+            'htm': InputFormat.HTML,
+            'xhtml': InputFormat.HTML,
+            'xml': InputFormat.XML_JATS,
+            'nxml': InputFormat.XML_JATS,
+            'jpg': InputFormat.IMAGE,
+            'jpeg': InputFormat.IMAGE,
+            'png': InputFormat.IMAGE,
+            'tif': InputFormat.IMAGE,
+            'tiff': InputFormat.IMAGE,
+            'bmp': InputFormat.IMAGE,
+            'adoc': InputFormat.ASCIIDOC,
+            'asciidoc': InputFormat.ASCIIDOC,
+            'asc': InputFormat.ASCIIDOC,
+            'csv': InputFormat.CSV,
+            'xlsx': InputFormat.XLSX,
+            'json': InputFormat.JSON_DOCLING
         }
-        if ext in manual_mapping:
-             return manual_mapping[ext]
-
-        # 알 수 없을 경우 AUTODETECT 또는 None
-        if 'AUTODETECT' in InputFormat.__members__:
-             return InputFormat.AUTODETECT
-
-        return None # 추정 실패 또는 지원하지 않는 형식
+        
+        input_format = format_map.get(ext)
+        if input_format is None:
+            raise ParsingError(f"지원하지 않는 파일 형식입니다: .{ext}")
+        
+        return input_format
 
     def parse(self, raw_document: RawDocument) -> ParsedDocument:
         """
         RawDocument를 Docling DocumentConverter로 파싱합니다.
         """
-        print(f"[PARSING] 시작: {raw_document.metadata.get('filename', 'unknown')}")
+        filename = raw_document.metadata.get('filename', 'unknown')
+        print(f"\n[PARSING] 시작: {filename}")
 
         if not raw_document.content:
             logger.warning("DoclingParserAdapter: Empty document content received")
@@ -362,10 +414,14 @@ class DoclingParserAdapter(DocumentParsingPort):
             return ParsedDocument(content=raw_document.content, metadata=raw_document.metadata)
 
         try:
-            input_format = self._guess_input_format(raw_document.metadata)
-            if not input_format:
-                logger.warning("DoclingParserAdapter: Could not determine input format, using AUTODETECT")
-                input_format = InputFormat.AUTODETECT
+            # 입력 형식 확인 (수정된 부분)
+            try:
+                input_format = self._guess_input_format(filename)
+                if not input_format:
+                    raise ParsingError(f"파일 형식을 확인할 수 없습니다: {filename}")
+            except ParsingError as e:
+                logger.error(f"DoclingParserAdapter: {str(e)}")
+                raise
 
             logger.info(f"DoclingParserAdapter: Converting document with format {input_format}")
 
@@ -384,60 +440,149 @@ class DoclingParserAdapter(DocumentParsingPort):
                 }
                 file_ext = mime_to_ext.get(content_type, '')
 
-            # 임시 파일 생성 (확장자 포함)
+            # 1. 임시 파일 생성
             with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as temp_file:
                 temp_file.write(raw_document.content)
                 temp_path = Path(temp_file.name)
 
-            # 올바른 매개변수로 convert 호출
+            # 2. DocumentConverter로 변환
             result = self._converter.convert(
                 source=temp_path,
-                headers={"Content-Type": "application/pdf"}  # 필요한 경우
+                headers={"Content-Type": "application/pdf"}
             )
 
+            # 3. 텍스트 추출
             if result.status == ConversionStatus.SUCCESS:
-                logger.info("DoclingParserAdapter: Document conversion successful")
-                
-                # 결과에서 문서 객체 가져오기
                 doc = result.document
                 
-                # 1. 백엔드 텍스트 추출 시도
+                # 1. 기본 텍스트 추출
                 backend_text = ""
-                try:
-                    if hasattr(doc, 'export_to_text') and callable(doc.export_to_text):
-                        backend_text = doc.export_to_text()
-                        print(f"[PARSING] 백엔드 텍스트 추출: {len(backend_text)} 글자")
-                except Exception as e:
-                    print(f"[PARSING] 백엔드 텍스트 추출 실패: {e}")
-                
-                # 2. OCR 텍스트 추출 시도
                 ocr_text = ""
                 try:
-                    # 여러 방법으로 OCR 결과 접근 시도
-                    if hasattr(doc, 'ocr_text') and doc.ocr_text:
+                    if hasattr(doc, 'export_to_text'):
+                        backend_text = doc.export_to_text()
+                    if hasattr(doc, 'ocr_text'):
                         ocr_text = doc.ocr_text
-                    elif hasattr(doc, 'export_to_markdown') and callable(doc.export_to_markdown):
+                    elif hasattr(doc, 'export_to_markdown'):
                         ocr_text = doc.export_to_markdown()
-                    
-                    if ocr_text:
-                        print(f"[PARSING] OCR 텍스트 추출: {len(ocr_text)} 글자")
                 except Exception as e:
-                    print(f"[PARSING] OCR 텍스트 추출 실패: {e}")
+                    logger.error(f"Text extraction error: {e}")
                 
-                # 3. 최적의 텍스트 선택
+                # 2. 테이블 정보 추출
+                tables = []
+                table_structures = []
+                table_cell_matches = []
+                try:
+                    if hasattr(doc, 'tables'):
+                        for table in doc.tables:
+                            tables.append({
+                                'structure': table.structure,
+                                'content': table.content,
+                                'position': table.position
+                            })
+                    if hasattr(doc, 'table_structures'):
+                        table_structures = doc.table_structures
+                    if hasattr(doc, 'table_cell_matches'):
+                        table_cell_matches = doc.table_cell_matches
+                except Exception as e:
+                    logger.error(f"Table extraction error: {e}")
+                
+                # 3. 이미지 정보 추출
+                images = []
+                image_classifications = []
+                image_descriptions = []
+                try:
+                    if hasattr(doc, 'images'):
+                        for image in doc.images:
+                            images.append({
+                                'data': image.data,
+                                'description': image.description,
+                                'position': image.position
+                            })
+                    if hasattr(doc, 'image_classifications'):
+                        image_classifications = doc.image_classifications
+                    if hasattr(doc, 'image_descriptions'):
+                        image_descriptions = doc.image_descriptions
+                except Exception as e:
+                    logger.error(f"Image extraction error: {e}")
+                
+                # 4. 수식 정보 추출
+                equations = []
+                formula_enrichments = []
+                try:
+                    if hasattr(doc, 'equations'):
+                        for eq in doc.equations:
+                            equations.append({
+                                'content': eq.content,
+                                'position': eq.position
+                            })
+                    if hasattr(doc, 'formula_enrichments'):
+                        formula_enrichments = doc.formula_enrichments
+                except Exception as e:
+                    logger.error(f"Equation extraction error: {e}")
+                
+                # 5. 코드 블록 추출
+                code_blocks = []
+                code_enrichments = []
+                try:
+                    if hasattr(doc, 'code_blocks'):
+                        for code in doc.code_blocks:
+                            code_blocks.append({
+                                'content': code.content,
+                                'language': code.language,
+                                'position': code.position
+                            })
+                    if hasattr(doc, 'code_enrichments'):
+                        code_enrichments = doc.code_enrichments
+                except Exception as e:
+                    logger.error(f"Code block extraction error: {e}")
+                
+                # 6. 문서 구조 정보 추출
+                headings = []
+                paragraphs = []
+                lists = []
+                try:
+                    if hasattr(doc, 'headings'):
+                        headings = doc.headings
+                    if hasattr(doc, 'paragraphs'):
+                        paragraphs = doc.paragraphs
+                    if hasattr(doc, 'lists'):
+                        lists = doc.lists
+                except Exception as e:
+                    logger.error(f"Document structure extraction error: {e}")
+                
+                # 7. 레이아웃 정보 추출
+                layout = None
+                page_info = []
+                try:
+                    if hasattr(doc, 'layout'):
+                        layout = doc.layout
+                    if hasattr(doc, 'page_info'):
+                        page_info = doc.page_info
+                except Exception as e:
+                    logger.error(f"Layout extraction error: {e}")
+                
+                # 8. OCR 정보 추출
+                ocr_results = None
+                ocr_confidence = None
+                try:
+                    if hasattr(doc, 'ocr_results'):
+                        ocr_results = doc.ocr_results
+                    if hasattr(doc, 'ocr_confidence'):
+                        ocr_confidence = doc.ocr_confidence
+                except Exception as e:
+                    logger.error(f"OCR information extraction error: {e}")
+                
+                # 최종 텍스트 선택 및 정제
                 document_text = ""
-                
-                # 글리프 태그 확인
                 if "glyph<" in backend_text or backend_text.strip() == "":
-                    # 한글 또는 글리프 문제 - OCR 결과 사용
                     document_text = ocr_text
                     print("[PARSING] 글리프 감지됨: OCR 텍스트 사용")
                 else:
-                    # 일반 텍스트 PDF - 백엔드 텍스트 사용
                     document_text = backend_text
                     print("[PARSING] 정상 텍스트: 백엔드 텍스트 사용")
                 
-                # 텍스트 정제 (태그 제거 등)
+                # 텍스트 정제
                 document_text = re.sub(r'glyph<[^>]+>', '', document_text)
                 document_text = re.sub(r'<[^>]+>', '', document_text)
                 
@@ -449,9 +594,164 @@ class DoclingParserAdapter(DocumentParsingPort):
                     print(document_text[:200] + "..." if len(document_text) > 200 else document_text)
                     print("==============================\n")
                 
+                # 테이블 정보 추출
+                tables = []
+                if hasattr(doc, 'tables'):
+                    for table in doc.tables:
+                        tables.append({
+                            'structure': table.structure,
+                            'content': table.content,
+                            'position': table.position
+                        })
+                
+                # 이미지 정보 추출
+                images = []
+                if hasattr(doc, 'images'):
+                    for image in doc.images:
+                        images.append({
+                            'data': image.data,
+                            'description': image.description,
+                            'position': image.position
+                        })
+                
+                # 파싱 결과 출력 추가
+                def print_parsing_results(parsed_doc: ParsedDocument):
+                    print("\n========== 파싱 결과 ==========")
+                    print(f"파일명: {filename}")
+                    
+                    # 기본 텍스트 내용
+                    if parsed_doc.content:
+                        print("\n[텍스트 내용 샘플]")
+                        content_preview = parsed_doc.content[:200] + "..." if len(parsed_doc.content) > 200 else parsed_doc.content
+                        print(content_preview)
+                    
+                    # 테이블 정보
+                    if parsed_doc.tables:
+                        print(f"\n[테이블 수]: {len(parsed_doc.tables)}")
+                        for i, table in enumerate(parsed_doc.tables[:2], 1):  # 처음 2개만 출력
+                            print(f"\n테이블 {i} 미리보기:")
+                            print(f"- 구조: {table.get('structure', '정보 없음')}")
+                            print(f"- 위치: {table.get('position', '정보 없음')}")
+                    
+                    # 이미지 정보
+                    if parsed_doc.images:
+                        print(f"\n[이미지 수]: {len(parsed_doc.images)}")
+                        for i, img in enumerate(parsed_doc.images[:2], 1):  # 처음 2개만 출력
+                            print(f"\n이미지 {i} 정보:")
+                            print(f"- 설명: {img.get('description', '정보 없음')}")
+                            print(f"- 위치: {img.get('position', '정보 없음')}")
+                    
+                    # 문서 구조
+                    if parsed_doc.headings:
+                        print(f"\n[제목 구조 수]: {len(parsed_doc.headings)}")
+                        for i, heading in enumerate(parsed_doc.headings[:3], 1):  # 처음 3개만 출력
+                            print(f"제목 {i}: {heading}")
+                    
+                    # OCR 결과
+                    if parsed_doc.ocr_confidence is not None:
+                        print(f"\n[OCR 신뢰도]: {parsed_doc.ocr_confidence:.2%}")
+                    
+                    # 수식 정보
+                    if parsed_doc.equations:
+                        print(f"\n[수식 수]: {len(parsed_doc.equations)}")
+                        for i, eq in enumerate(parsed_doc.equations[:2], 1):  # 처음 2개만 출력
+                            print(f"수식 {i}: {eq.get('content', '정보 없음')}")
+                    
+                    print("\n==============================\n")
+
+                # FastAPI 응답 형식으로 변환
+                def create_api_response(parsed_doc: ParsedDocument) -> dict:
+                    return {
+                        "filename": filename,
+                        "content_preview": parsed_doc.content[:200] + "..." if len(parsed_doc.content) > 200 else parsed_doc.content,
+                        "metadata": {
+                            "tables_count": len(parsed_doc.tables),
+                            "images_count": len(parsed_doc.images),
+                            "headings_count": len(parsed_doc.headings),
+                            "ocr_confidence": parsed_doc.ocr_confidence,
+                            "equations_count": len(parsed_doc.equations)
+                        },
+                        "tables_preview": [
+                            {
+                                "structure": table.get('structure'),
+                                "position": table.get('position')
+                            } for table in parsed_doc.tables[:2]
+                        ],
+                        "images_preview": [
+                            {
+                                "description": img.get('description'),
+                                "position": img.get('position')
+                            } for img in parsed_doc.images[:2]
+                        ],
+                        "headings_preview": parsed_doc.headings[:3]
+                    }
+
+                # 결과 출력
+                print_parsing_results(ParsedDocument(
+                    content=document_text,
+                    metadata=raw_document.metadata,
+                    tables=tables,
+                    images=images,
+                    equations=equations,
+                    code_blocks=code_blocks,
+                    headings=headings,
+                    paragraphs=paragraphs,
+                    lists=lists,
+                    layout=layout,
+                    page_info=page_info,
+                    ocr_results=ocr_results,
+                    ocr_confidence=ocr_confidence,
+                    image_classifications=image_classifications,
+                    image_descriptions=image_descriptions,
+                    table_structures=table_structures,
+                    table_cell_matches=table_cell_matches,
+                    code_enrichments=code_enrichments,
+                    formula_enrichments=formula_enrichments
+                ))
+                
+                # FastAPI 응답 데이터 저장
+                raw_document.metadata['api_response'] = create_api_response(ParsedDocument(
+                    content=document_text,
+                    metadata=raw_document.metadata,
+                    tables=tables,
+                    images=images,
+                    equations=equations,
+                    code_blocks=code_blocks,
+                    headings=headings,
+                    paragraphs=paragraphs,
+                    lists=lists,
+                    layout=layout,
+                    page_info=page_info,
+                    ocr_results=ocr_results,
+                    ocr_confidence=ocr_confidence,
+                    image_classifications=image_classifications,
+                    image_descriptions=image_descriptions,
+                    table_structures=table_structures,
+                    table_cell_matches=table_cell_matches,
+                    code_enrichments=code_enrichments,
+                    formula_enrichments=formula_enrichments
+                ))
+                
                 return ParsedDocument(
                     content=document_text,
-                    metadata=raw_document.metadata
+                    metadata=raw_document.metadata,
+                    tables=tables,
+                    images=images,
+                    equations=equations,
+                    code_blocks=code_blocks,
+                    headings=headings,
+                    paragraphs=paragraphs,
+                    lists=lists,
+                    layout=layout,
+                    page_info=page_info,
+                    ocr_results=ocr_results,
+                    ocr_confidence=ocr_confidence,
+                    image_classifications=image_classifications,
+                    image_descriptions=image_descriptions,
+                    table_structures=table_structures,
+                    table_cell_matches=table_cell_matches,
+                    code_enrichments=code_enrichments,
+                    formula_enrichments=formula_enrichments
                 )
             else:
                 logger.error(f"DoclingParserAdapter: Document conversion failed with status {result.status}")
@@ -466,57 +766,58 @@ class DoclingParserAdapter(DocumentParsingPort):
             logger.error(f"DoclingParserAdapter: Unexpected error during parsing: {e}")
             raise ParsingError(f"Unexpected error during parsing: {e}") from e
 
-# PDF 파이프라인 옵션 설정 (DoclingParserAdapter 초기화 시)
-from docling.datamodel.pipeline_options import PdfPipelineOptions, EasyOcrOptions, TableStructureOptions, AcceleratorOptions, TableFormerMode
-
-# OCR 옵션 설정 (한글 지원)
-ocr_options = EasyOcrOptions(
-    lang=["ko", "en"],
-    confidence_threshold=0.3,
-    download_enabled=True
-)
-# 생성 후 속성 설정
-ocr_options.force_full_page_ocr = True
-
-# 가속 옵션 설정
-accelerator_options = AcceleratorOptions(
-    device="cpu",  # 또는 "cuda" (GPU 사용 시)
-    num_threads=4
-)
-
-# 테이블 구조 옵션
-table_options = TableStructureOptions(
-    do_cell_matching=True,
-    mode=TableFormerMode.ACCURATE  # 정확한 테이블 추출 모드
-)
-
-# PDF 파이프라인 옵션 생성
+# PDF 파이프라인 옵션 설정
 pdf_options = PdfPipelineOptions(
-    do_table_structure=True,      # 테이블 구조 추출
-    do_ocr=True,                  # OCR 활성화
-    do_code_enrichment=True,     # 코드 인식 활성화
-    do_formula_enrichment=True,  # 수식 인식 활성화
-    do_picture_classification=True,  # 이미지 분류 활성화
-    do_picture_description=True,     # 이미지 설명 활성화
-    force_backend_text=False,     # PDF 내장 텍스트 무시
-    
-    # 세부 옵션들
-    table_structure_options=table_options,
-    ocr_options=ocr_options,
-    
-    # 이미지 관련 설정
+    # 1. OCR 관련 설정
+    do_ocr=True,
+    ocr_options=EasyOcrOptions(
+        lang=["ko", "en"],
+        confidence_threshold=0.3,
+        download_enabled=True,
+        force_full_page_ocr=True
+    ),
+
+    # 2. 테이블 처리 설정
+    do_table_structure=True,
+    table_structure_options=TableStructureOptions(
+        do_cell_matching=True,
+        mode=TableFormerMode.ACCURATE
+    ),
+
+    # 3. 레이아웃 분석 설정
+    do_layout_analysis=True,
+    layout_analysis_options={
+        "detect_headers": True,
+        "detect_footers": True,
+        "detect_lists": True
+    },
+
+    # 4. 이미지 처리 설정
+    do_picture_classification=True,
+    do_picture_description=True,
+    generate_page_images=True,
+    generate_picture_images=True,
     images_scale=1.5,
-    generate_page_images=True,    # OCR용 페이지 이미지 생성
-    generate_picture_images=True,  # 문서 내 이미지 추출
+
+    # 5. 텍스트 추출 설정
+    force_backend_text=False,  # 내장 텍스트 우선 사용
+    extract_text_from_figures=True,
     
-    # 기타 설정
-    generate_parsed_pages=True,  # 파싱된 페이지 정보 생성
+    # 6. 수식/코드 인식 설정
+    do_formula_enrichment=True,
+    do_code_enrichment=True,
+
+    # 7. 페이지 처리 설정
+    generate_parsed_pages=True,
     
-    # 가속 옵션
-    accelerator_options=accelerator_options
+    # 8. 성능 설정
+    accelerator_options=AcceleratorOptions(
+        device="cpu",  # 또는 "cuda"
+        num_threads=4
+    )
 )
 
-# 파서 어댑터 생성 시 옵션 전달
+# 파서 어댑터 생성 시 PDF 옵션 전달
 parser_adapter = DoclingParserAdapter(
     allowed_formats=DOCLING_ALLOWED_FORMATS,
     pdf_options=pdf_options
