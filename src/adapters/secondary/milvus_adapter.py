@@ -131,6 +131,7 @@ import uuid # ID 생성을 위해 임포트
 from ports.output_ports import VectorDatabasePort # 구현할 포트 임포트
 from domain.models import DocumentChunk, EmbeddingVector # 저장할 도메인 모델 임포트
 from typing import List, Dict, Any, Optional # 타입 힌트 임포트
+import json
 
 
 class MilvusAdapter(VectorDatabasePort):
@@ -241,25 +242,18 @@ class MilvusAdapter(VectorDatabasePort):
 
                 # Milvus metadata 필드에 저장할 최종 JSON 객체 구성
                 milvus_metadata_value = {
-                    "chunk_text": chunk.content, # 청크 텍스트 전체 또는 일부 (Milvus VarChar 필드 크기 제한 있다면 유의)
+                    "chunk_text": chunk.content, 
                     "source_file": chunk_metadata_dict.get('filename', 'unknown'),
                     "chunk_index": chunk_metadata_dict.get('chunk_index', i),
-                    "page_number": chunk_metadata_dict.get('page_number'), # int가 아니면 None 또는 다른 처리
-                    # 기타 Docling/원본 메타데이터 추가
-                    "original_metadata": chunk_metadata_dict # 원본 청크 메타데이터 전체 포함 (JSON)
-                    # 임베딩 메타데이터에서 필요한 정보 추가
-                    # "embedding_model": embedding_model_info
+                    "page_number": chunk_metadata_dict.get('page_number'),
+                    "original_metadata": chunk_metadata_dict,
                 }
-                # Python Dict는 JSON으로 자동 변환됩니다.
 
-                # 엔티티 딕셔너리 생성 (Milvus insert 메서드가 요구하는 형식)
-                # 제공된 코드 스니펫의 스키마 필드명 사용
+                # 엔티티 딕셔너리 생성 - CustomJSONEncoder 사용
                 entity = {
-                    # "id": entity_id, # <-- ID 필드는 auto_id=True 이므로 데이터 삽입 시 포함 X
-                    "dense_embedding": dense_vector_data, # <-- dense_embedding 필드
-                    "sparse_embedding": sparse_vector_data, # <-- sparse_embedding 필드 (현재는 {} 또는 실제 sparse 데이터)
-                    "metadata": milvus_metadata_value, # <-- metadata 필드 (JSON 객체)
-                    # 스키마에 정의된 다른 필드 추가 (예: timestamp 등)
+                    "dense_embedding": dense_vector_data,
+                    "sparse_embedding": sparse_vector_data,
+                    "metadata": json.dumps(milvus_metadata_value, ensure_ascii=False, cls=CustomJSONEncoder),
                 }
                 entities_to_insert.append(entity)
 
@@ -320,3 +314,12 @@ class MilvusAdapter(VectorDatabasePort):
 # class MilvusException(Exception): ...
 # class VectorDatabaseError(Exception): ...
 # class MilvusAdapterError(VectorDatabaseError): ...
+
+# JSON 직렬화 가능한 커스텀 인코더 클래스 생성
+class CustomJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        # TableData 및 기타 직렬화 불가능한 객체 처리
+        try:
+            return str(obj)
+        except:
+            return f"[Object of type {type(obj).__name__}]"

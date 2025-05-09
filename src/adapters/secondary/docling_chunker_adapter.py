@@ -158,6 +158,46 @@ class DoclingChunkerAdapter(TextChunkingPort):
         """
         logger.info("DoclingChunkerAdapter: Starting chunking process...")
 
+        print("\n----- 청킹 단계 입력 데이터 확인 -----")
+        print(f"[CHUNKS] 원본 텍스트 길이: {len(parsed_document.content)} 글자")
+
+        # 테이블 정보가 있는지 확인
+        if parsed_document.tables:
+            print(f"[CHUNKS] 테이블 수: {len(parsed_document.tables)}")
+            for i, table in enumerate(parsed_document.tables[:2]):
+                print(f"  - 테이블 {i+1} 구조: {table.get('structure', '구조 정보 없음')[:50]}...")
+
+        # 이미지 정보가 있는지 확인
+        if parsed_document.images:
+            print(f"[CHUNKS] 이미지 수: {len(parsed_document.images)}")
+            for i, image in enumerate(parsed_document.images[:2]):
+                print(f"  - 이미지 {i+1} 설명: {image.get('description', '설명 없음')[:50]}...")
+
+        # 이미지 설명 정보가 있는지 확인
+        if parsed_document.image_descriptions:
+            print(f"[CHUNKS] 이미지 설명 정보 수: {len(parsed_document.image_descriptions)}")
+            for i, desc in enumerate(parsed_document.image_descriptions[:2]):
+                if isinstance(desc, dict):
+                    img_id = desc.get('id', 'N/A')
+                    img_desc = desc.get('description', 'N/A')
+                    print(f"  - 설명 {i+1}: ID={img_id}, 내용={img_desc[:50]}...")
+
+        # 내부 Docling 문서 객체가 있는지 확인
+        if '__internal_docling_document__' in parsed_document.metadata:
+            print("[CHUNKS] Docling 내부 문서 객체 있음")
+            docling_doc = parsed_document.metadata['__internal_docling_document__']
+            
+            # 문서 객체가 레이아웃 정보를 가지고 있는지 확인
+            if hasattr(docling_doc, 'layout'):
+                layout = docling_doc.layout
+                print(f"  - 레이아웃 정보 있음: {type(layout).__name__}")
+                if hasattr(layout, 'items'):
+                    print(f"  - 레이아웃 항목 수: {len(layout.items) if isinstance(layout.items, list) else 'N/A'}")
+        else:
+            print("[CHUNKS] Docling 내부 문서 객체 없음")
+
+        print("----- 청킹 단계 입력 데이터 확인 종료 -----\n")
+
         chunks: List[DocumentChunk] = []
         # 파서 어댑터에서 ParsedDocument 메타데이터에 담아 전달한 Docling 내부 문서 객체를 추출
         # '__internal_docling_document__' 키는 파서 어댑터 코드와 일치해야 합니다.
@@ -203,6 +243,52 @@ class DoclingChunkerAdapter(TextChunkingPort):
                                 current_chunk_metadata['captions'] = docling_meta_object.captions
                             if hasattr(docling_meta_object, 'origin'):
                                 current_chunk_metadata['origin'] = docling_meta_object.origin
+
+                            # 소스 판별 및 메타데이터 추가
+                            if hasattr(docling_meta_object, 'table_ref') or 'table' in str(docling_meta_object):
+                                current_chunk_metadata["source"] = "table"
+                            
+                            # 2. 이미지/OCR 소스 확인
+                            elif hasattr(docling_meta_object, 'ocr_ref') or 'ocr' in str(docling_meta_object):
+                                current_chunk_metadata["source"] = "image"
+                                current_chunk_metadata["extraction_method"] = "ocr"
+                                
+                                # 이미지 설명 추가 (ParsedDocument의 images_descriptions에서 가져옴)
+                                if hasattr(docling_meta_object, 'image_id') and parsed_document.image_descriptions:
+                                    image_id = docling_meta_object.image_id
+                                    for img_desc in parsed_document.image_descriptions:
+                                        if img_desc.get('id') == image_id:
+                                            current_chunk_metadata["image_description"] = img_desc.get('description', '설명 없음')
+                                            break
+                                
+                            elif hasattr(docling_meta_object, 'image_ref') or 'image' in str(docling_meta_object):
+                                current_chunk_metadata["source"] = "image"
+                                
+                                # 이미지 설명 추가 (ParsedDocument의 images에서 가져옴)
+                                if hasattr(docling_meta_object, 'image_id') and parsed_document.images:
+                                    image_id = docling_meta_object.image_id
+                                    for img in parsed_document.images:
+                                        if img.get('id') == image_id:
+                                            current_chunk_metadata["image_description"] = img.get('description', '설명 없음')
+                                            break
+                                
+                                # 이미지 설명 확인하여 출력
+                                if "image_description" in current_chunk_metadata:
+                                    print(f"  이미지 설명: {current_chunk_metadata['image_description']}")
+                            
+                            # 3. 수식 소스 확인
+                            elif hasattr(docling_meta_object, 'equation_ref') or 'formula' in str(docling_meta_object):
+                                current_chunk_metadata["source"] = "formula"
+                            
+                            # 4. 코드 소스 확인
+                            elif hasattr(docling_meta_object, 'code_ref') or 'code' in str(docling_meta_object):
+                                current_chunk_metadata["source"] = "code"
+                            
+                            # 5. 기본 텍스트 소스
+                            else:
+                                current_chunk_metadata["source"] = "text"
+                        else:
+                            current_chunk_metadata["source"] = "text"  # 기본 소스 값
 
                         logger.info(f"Processed chunk result {chunk_index} from Docling")
 
@@ -254,6 +340,9 @@ class DoclingChunkerAdapter(TextChunkingPort):
         print(f"[CHUNKING] 성공: {len(chunks)}개 청크 생성됨")
         for i, chunk in enumerate(chunks[:3]):  # 처음 3개만 표시
             print(f"  청크 {i+1}: {len(chunk.content)} 문자")
+            # 청크가 이미지 소스인 경우 설명 추가 출력
+            if chunk.metadata.get("source") == "image" and "image_description" in chunk.metadata:
+                print(f"  이미지 설명: {chunk.metadata.get('image_description')}")
         if len(chunks) > 3:
             print(f"  ... 외 {len(chunks)-3}개 청크")
 
@@ -268,6 +357,9 @@ class DoclingChunkerAdapter(TextChunkingPort):
         print(f"[CHUNKING] 성공: {len(chunks)}개 청크 생성됨")
         for i, chunk in enumerate(chunks[:3]):  # 처음 3개만 표시
             print(f"  청크 {i+1}: {len(chunk.content)} 문자")
+            # 청크가 이미지 소스인 경우 설명 추가 출력
+            if chunk.metadata.get("source") == "image" and "image_description" in chunk.metadata:
+                print(f"  이미지 설명: {chunk.metadata.get('image_description')}")
         if len(chunks) > 3:
             print(f"  ... 외 {len(chunks)-3}개 청크")
         

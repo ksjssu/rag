@@ -60,7 +60,7 @@ from .adapters.secondary.milvus_adapter import MilvusAdapter # <-- 상대 경로
 # 환경 변수에서 값을 읽어옵니다. 환경 변수가 설정되지 않았다면 기본값을 사용합니다.
 MILVUS_HOST: str = os.getenv("MILVUS_HOST", "10.10.30.80")
 MILVUS_PORT: int = int(os.getenv("MILVUS_PORT", 30953))
-MILVUS_COLLECTION: str = os.getenv("MILVUS_COLLECTION", "rag_chunks")
+MILVUS_COLLECTION: str = os.getenv("MILVUS_COLLECTION", "test_250430_1024_hybrid")
 MILVUS_USER: Optional[str] = os.getenv("MILVUS_USER", "root") # 환경 변수 없으면 None
 MILVUS_PASSWORD: Optional[str] = os.getenv("MILVUS_PASSWORD", "smr0701!") # 환경 변수 없으면 None
 

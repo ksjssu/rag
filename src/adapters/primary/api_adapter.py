@@ -95,15 +95,21 @@ def setup_api_routes(input_port: DocumentProcessingInputPort) -> APIRouter:
             # 3. 애플리케이션 코어로부터 반환된 결과(List[DocumentChunk])를
             #    외부 클라이언트에게 응답할 형식으로 변환합니다.
             #    FastAPI의 response_model=List[DocumentChunk] 설정이 이 변환(파이단틱 모델 직렬화)을 자동으로 처리해 줍니다.
-            return {
-                "status": "success",
-                "file_info": {
-                    "filename": file.filename,
-                    "content_type": file.content_type
-                },
-                "parsing_results": processed_result.metadata.get('api_response', {}),
-                "chunks_count": len(processed_result) if isinstance(processed_result, list) else 0
-            }
+            if isinstance(processed_result, list):
+                return {
+                    "status": "success",
+                    "count": len(processed_result)
+                }
+            elif hasattr(processed_result, 'metadata'):
+                return {
+                    "status": "success",
+                    "metadata": processed_result.metadata
+                }
+            else:
+                return {
+                    "status": "success",
+                    "result": "Document processed"
+                }
 
         except Exception as e:
             # 처리 중 발생한 예외를 잡아서 적절한 HTTP 오류 응답으로 변환합니다.

@@ -13,6 +13,10 @@ from enum import Enum
 # Configure logging
 logger = logging.getLogger(__name__)
 
+# 파일 상단에 추가
+logging.basicConfig(level=logging.DEBUG)
+logger.setLevel(logging.DEBUG)
+
 # --- Docling 라이브러리 임포트 ---
 # src/adapters/secondary/docling_parser_adapter.py
 
@@ -402,6 +406,7 @@ class DoclingParserAdapter(DocumentParsingPort):
         """
         RawDocument를 Docling DocumentConverter로 파싱합니다.
         """
+        print("[DEBUG] parse 메서드 시작")
         filename = raw_document.metadata.get('filename', 'unknown')
         print(f"\n[PARSING] 시작: {filename}")
 
@@ -410,8 +415,10 @@ class DoclingParserAdapter(DocumentParsingPort):
             return ParsedDocument(content="", metadata=raw_document.metadata)
 
         if not _docling_available or not self._converter:
-            logger.warning("DoclingParserAdapter: Using fallback parsing (Docling not available)")
+            print("[DEBUG] Docling 사용 불가 - 폴백 사용")
             return ParsedDocument(content=raw_document.content, metadata=raw_document.metadata)
+        else:
+            print("[DEBUG] Docling 사용 가능 - 변환 시도")
 
         try:
             # 입력 형식 확인 (수정된 부분)
@@ -476,9 +483,9 @@ class DoclingParserAdapter(DocumentParsingPort):
                     if hasattr(doc, 'tables'):
                         for table in doc.tables:
                             tables.append({
-                                'structure': table.structure,
-                                'content': table.content,
-                                'position': table.position
+                                'structure': table.data,
+                                'content': table.text if hasattr(table, 'text') else "",
+                                'position': table.prov[0] if hasattr(table, 'prov') and table.prov else None
                             })
                     if hasattr(doc, 'table_structures'):
                         table_structures = doc.table_structures
@@ -599,9 +606,9 @@ class DoclingParserAdapter(DocumentParsingPort):
                 if hasattr(doc, 'tables'):
                     for table in doc.tables:
                         tables.append({
-                            'structure': table.structure,
-                            'content': table.content,
-                            'position': table.position
+                            'structure': table.data,
+                            'content': table.text if hasattr(table, 'text') else "",
+                            'position': table.prov[0] if hasattr(table, 'prov') and table.prov else None
                         })
                 
                 # 이미지 정보 추출
@@ -732,27 +739,130 @@ class DoclingParserAdapter(DocumentParsingPort):
                     formula_enrichments=formula_enrichments
                 ))
                 
-                return ParsedDocument(
-                    content=document_text,
-                    metadata=raw_document.metadata,
-                    tables=tables,
-                    images=images,
-                    equations=equations,
-                    code_blocks=code_blocks,
-                    headings=headings,
-                    paragraphs=paragraphs,
-                    lists=lists,
-                    layout=layout,
-                    page_info=page_info,
-                    ocr_results=ocr_results,
-                    ocr_confidence=ocr_confidence,
-                    image_classifications=image_classifications,
-                    image_descriptions=image_descriptions,
-                    table_structures=table_structures,
-                    table_cell_matches=table_cell_matches,
-                    code_enrichments=code_enrichments,
-                    formula_enrichments=formula_enrichments
-                )
+                # 문서의 요소들 로깅 추가
+                print("\n----- 문서 요소들 디버깅 정보 -----")
+
+                # 1. 레이아웃 요소 로깅
+                if hasattr(doc, 'layout') and doc.layout:
+                    print(f"[LAYOUT] 레이아웃 정보 있음 (타입: {type(doc.layout)})")
+                    if hasattr(doc.layout, 'items'):
+                        layout_items = doc.layout.items if isinstance(doc.layout.items, list) else []
+                        print(f"  - 레이아웃 항목 수: {len(layout_items)}")
+                        
+                        # 레이아웃 항목 타입 분포 확인
+                        layout_types = {}
+                        for item in layout_items:
+                            item_type = getattr(item, 'label', getattr(item, 'type', type(item).__name__))
+                            if item_type in layout_types:
+                                layout_types[item_type] += 1
+                            else:
+                                layout_types[item_type] = 1
+                        
+                        print(f"  - 레이아웃 항목 타입 분포: {layout_types}")
+                else:
+                    print("[LAYOUT] 레이아웃 정보 없음")
+
+                # 2. 테이블 구조 상세 로깅
+                if hasattr(doc, 'tables'):
+                    print(f"[TABLES] 테이블 수: {len(doc.tables)}")
+                    for i, table in enumerate(doc.tables[:2]):  # 처음 2개만 출력
+                        print(f"  - 테이블 {i+1} 정보:")
+                        print(f"    * 타입: {type(table).__name__}")
+                        print(f"    * 속성: {dir(table)[:10]}...")
+                        
+                        if hasattr(table, 'data'):
+                            print(f"    * 데이터 타입: {type(table.data).__name__}")
+                            # TableData 구조 확인
+                            if hasattr(table.data, 'rows') and hasattr(table.data, 'columns'):
+                                print(f"    * 행 수: {len(table.data.rows)}, 열 수: {len(table.data.columns)}")
+                        
+                        # 테이블 텍스트 샘플
+                        if hasattr(table, 'text'):
+                            text_sample = table.text[:50] + "..." if len(table.text) > 50 else table.text
+                            print(f"    * 텍스트 샘플: {text_sample}")
+                else:
+                    print("[TABLES] 테이블 정보 없음")
+
+                # 3. 이미지 정보 상세 로깅
+                if hasattr(doc, 'images'):
+                    print(f"[IMAGES] 이미지 수: {len(doc.images)}")
+                    for i, image in enumerate(doc.images[:2]):  # 처음 2개만 출력
+                        print(f"  - 이미지 {i+1} 정보:")
+                        print(f"    * 타입: {type(image).__name__}")
+                        print(f"    * 속성: {dir(image)[:10]}...")
+                        
+                        # 이미지 ID 확인
+                        if hasattr(image, 'id'):
+                            print(f"    * ID: {image.id}")
+                        
+                        # 이미지 설명 확인
+                        if hasattr(image, 'description'):
+                            desc = image.description
+                            desc_sample = desc[:50] + "..." if desc and len(desc) > 50 else desc
+                            print(f"    * 설명: {desc_sample}")
+                        
+                        # 이미지 위치 확인
+                        if hasattr(image, 'position'):
+                            print(f"    * 위치: {image.position}")
+                else:
+                    print("[IMAGES] 이미지 정보 없음")
+
+                # 4. 이미지 설명 로깅
+                if hasattr(doc, 'image_descriptions'):
+                    print(f"[IMAGE DESCRIPTIONS] 이미지 설명 수: {len(doc.image_descriptions)}")
+                    for i, desc in enumerate(doc.image_descriptions[:2]):  # 처음 2개만 출력
+                        print(f"  - 이미지 설명 {i+1}:")
+                        desc_text = None
+                        desc_id = None
+                        
+                        if isinstance(desc, dict):
+                            desc_text = desc.get('description', 'N/A')
+                            desc_id = desc.get('id', 'N/A')
+                        elif hasattr(desc, 'description'):
+                            desc_text = desc.description
+                            desc_id = getattr(desc, 'id', 'N/A')
+                        
+                        if desc_text:
+                            desc_sample = desc_text[:50] + "..." if len(desc_text) > 50 else desc_text
+                            print(f"    * ID: {desc_id}")
+                            print(f"    * 설명: {desc_sample}")
+                else:
+                    print("[IMAGE DESCRIPTIONS] 이미지 설명 정보 없음")
+
+                print("----- 디버깅 정보 종료 -----\n")
+
+                # 여기에 이미지 추출 코드 추가
+                # 파일 형식별 이미지 추출 기능 함수 정의
+                def extract_images_from_file(file_bytes, file_extension, filename):
+                    # 이미지 추출 코드...
+                
+                # 이미지 처리 코드
+                    print("\n----- 추가 이미지 인식 시작 -----")
+                    extracted_images = []
+                    
+                    # 이미지 추출 및 처리 로직...
+                    
+                    return ParsedDocument(
+                        content=document_text,
+                        metadata=raw_document.metadata,
+                        tables=tables,
+                        images=images,
+                        equations=equations,
+                        code_blocks=code_blocks,
+                        headings=headings,
+                        paragraphs=paragraphs,
+                        lists=lists,
+                        layout=layout,
+                        page_info=page_info,
+                        ocr_results=ocr_results,
+                        ocr_confidence=ocr_confidence,
+                        image_classifications=image_classifications,
+                        image_descriptions=image_descriptions,
+                        table_structures=table_structures,
+                        table_cell_matches=table_cell_matches,
+                        code_enrichments=code_enrichments,
+                        formula_enrichments=formula_enrichments
+                    )
             else:
                 logger.error(f"DoclingParserAdapter: Document conversion failed with status {result.status}")
                 if result.errors:
@@ -822,3 +932,183 @@ parser_adapter = DoclingParserAdapter(
     allowed_formats=DOCLING_ALLOWED_FORMATS,
     pdf_options=pdf_options
 )
+
+# 파일 형식별 이미지 추출 기능
+def extract_images_from_file(file_bytes, file_extension, filename):
+    print(f"[이미지 추출] 시작: {filename} (형식: {file_extension})")
+    
+    # 결과 저장용 리스트
+    extracted_images = []
+    
+    try:
+        # 1. PDF 파일 처리
+        if file_extension.lower() == 'pdf':
+            return extract_images_from_pdf(file_bytes)
+            
+        # 2. DOCX 파일 처리
+        elif file_extension.lower() in ['docx', 'doc']:
+            import io
+            from docx import Document
+            from PIL import Image
+            
+            doc = Document(io.BytesIO(file_bytes))
+            img_index = 0
+            
+            for rel in doc.part.rels.values():
+                if "image" in rel.target_ref:
+                    try:
+                        img_bytes = rel.target_part.blob
+                        img = Image.open(io.BytesIO(img_bytes))
+                        
+                        extracted_images.append({
+                            'data': img,
+                            'description': f"Image from {filename}",
+                            'position': None,
+                            'id': f"docx_img_{img_index}"
+                        })
+                        img_index += 1
+                    except Exception as e:
+                        print(f"[이미지 추출] DOCX 이미지 처리 오류: {e}")
+            
+            print(f"[이미지 추출] DOCX에서 {len(extracted_images)}개 이미지 추출됨")
+            
+        # 3. PPTX 파일 처리
+        elif file_extension.lower() in ['pptx', 'ppt']:
+            import io
+            from pptx import Presentation
+            from PIL import Image
+            
+            prs = Presentation(io.BytesIO(file_bytes))
+            img_index = 0
+            
+            for slide in prs.slides:
+                for shape in slide.shapes:
+                    if hasattr(shape, 'image'):
+                        try:
+                            img_bytes = shape.image.blob
+                            img = Image.open(io.BytesIO(img_bytes))
+                            
+                            extracted_images.append({
+                                'data': img,
+                                'description': f"Image from slide {slide.slide_id}",
+                                'position': {"slide": slide.slide_id},
+                                'id': f"pptx_img_{img_index}"
+                            })
+                            img_index += 1
+                        except Exception as e:
+                            print(f"[이미지 추출] PPTX 이미지 처리 오류: {e}")
+            
+            print(f"[이미지 추출] PPTX에서 {len(extracted_images)}개 이미지 추출됨")
+            
+        # 4. XLSX 파일 처리
+        elif file_extension.lower() in ['xlsx', 'xls']:
+            import io
+            import openpyxl
+            from PIL import Image
+            
+            wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
+            img_index = 0
+            
+            for sheet_name in wb.sheetnames:
+                sheet = wb[sheet_name]
+                for image in sheet._images:
+                    try:
+                        img_bytes = image._data()
+                        img = Image.open(io.BytesIO(img_bytes))
+                        
+                        extracted_images.append({
+                            'data': img,
+                            'description': f"Image from sheet {sheet_name}",
+                            'position': {"sheet": sheet_name},
+                            'id': f"xlsx_img_{img_index}"
+                        })
+                        img_index += 1
+                    except Exception as e:
+                        print(f"[이미지 추출] XLSX 이미지 처리 오류: {e}")
+            
+            print(f"[이미지 추출] XLSX에서 {len(extracted_images)}개 이미지 추출됨")
+            
+        # 5. 이미지 파일 직접 처리
+        elif file_extension.lower() in ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'tif']:
+            import io
+            from PIL import Image
+            
+            try:
+                img = Image.open(io.BytesIO(file_bytes))
+                extracted_images.append({
+                    'data': img,
+                    'description': f"Image file: {filename}",
+                    'position': None,
+                    'id': "original_image"
+                })
+                print(f"[이미지 추출] 이미지 파일 처리 완료")
+            except Exception as e:
+                print(f"[이미지 추출] 이미지 파일 처리 오류: {e}")
+                
+        # 6. HTML 파일 처리
+        elif file_extension.lower() in ['html', 'htm']:
+            import io
+            import requests
+            import base64
+            from bs4 import BeautifulSoup
+            from PIL import Image
+            
+            try:
+                soup = BeautifulSoup(file_bytes, 'html.parser')
+                img_tags = soup.find_all('img')
+                img_index = 0
+                
+                for img_tag in img_tags:
+                    try:
+                        src = img_tag.get('src', '')
+                        
+                        # Base64 인코딩 이미지 처리
+                        if src.startswith('data:image'):
+                            # data:image/jpeg;base64,/9j/4AAQ... 형식에서 이미지 데이터 추출
+                            img_data = src.split(',', 1)[1]
+                            img_bytes = base64.b64decode(img_data)
+                            img = Image.open(io.BytesIO(img_bytes))
+                            
+                            extracted_images.append({
+                                'data': img,
+                                'description': img_tag.get('alt', f"Image from HTML"),
+                                'position': None,
+                                'id': f"html_img_{img_index}"
+                            })
+                            img_index += 1
+                    except Exception as e:
+                        print(f"[이미지 추출] HTML 이미지 처리 오류: {e}")
+                
+                print(f"[이미지 추출] HTML에서 {len(extracted_images)}개 이미지 추출됨")
+            except Exception as e:
+                print(f"[이미지 추출] HTML 파싱 오류: {e}")
+                
+        # 7. 기타 파일 형식 - 확장 가능
+        else:
+            print(f"[이미지 추출] 지원되지 않는 파일 형식: {file_extension}")
+    
+    except ImportError as e:
+        print(f"[이미지 추출] 필요한 라이브러리 없음: {e}")
+    except Exception as e:
+        print(f"[이미지 추출] 오류 발생: {e}")
+    
+    print(f"[이미지 추출] 완료: {len(extracted_images)}개 이미지 추출됨")
+    return extracted_images
+
+# 메인 이미지 처리 코드
+print("\n----- 추가 이미지 인식 시작 -----")
+extracted_images = []
+
+# 1. 기존 방식으로 인식된 이미지 확인
+if hasattr(doc, 'images') and doc.images:
+    print(f"[이미지 인식] 레이아웃 모델에서 {len(doc.images)}개 이미지 인식됨")
+else:
+    print("[이미지 인식] 레이아웃 모델에서 인식된 이미지 없음, 직접 추출 시도")
+    
+    # 2. 파일 확장자 확인
+    file_extension = filename.split('.')[-1] if '.' in filename else ''
+    
+    # 3. 직접 파일에서 이미지 추출
+    extracted_images = extract_images_from_file(raw_document.content, file_extension, filename)
+
+# 나머지 코드는 이전과 동일...
