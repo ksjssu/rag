@@ -5,8 +5,8 @@ import random
 from typing import List, Dict, Any, Optional
 import math
 
-# Configure logging
-logger = logging.getLogger(__name__)
+# 로거 임포트
+from src.config import logger
 
 # --- 임베딩 라이브러리 임포트 ---
 # Sentence-Transformers 또는 Hugging Face transformers + torch 설치 필요:
@@ -24,19 +24,19 @@ try:
     # from .milvus_adapter import _milvus_library_available # <-- MilvusAdapter에서 플래그 가져오기 시도
 
     _embedding_library_available = True # BGEM3EmbeddingFunction 사용 가능 여부 (pymilvus 사용 가능 여부와 연결)
-    print("BGEM3EmbeddingFunction from pymilvus imported successfully.")
-except ImportError as e:
-    print(f"Warning: BGEM3EmbeddingFunction from pymilvus not found. Import error: {e}") # <-- 오류 메시지 수정
-    print("BgeM3EmbedderAdapter will use mock embeddings.")
+    logger.info("BGEM3EmbeddingFunction from pymilvus imported successfully.")
+except ImportError:
+    # pymilvus 라이브러리를 설치하지 않았거나 임포트할 수 없는 경우
+    # 더미 클래스와 플래그를 정의합니다.
     _embedding_library_available = False # BGEM3EmbeddingFunction 사용 불가
 
     # --- 임베딩 라이브러리가 없을 경우 에러 방지를 위한 더미 클래스 정의 ---
-    print("   Using dummy embedding classes.")
+    logger.info("   Using dummy embedding classes.")
     # Dummy class for BGEM3EmbeddingFunction (minimal implementation)
     class BGEM3EmbeddingFunction: # <-- 더미 클래스 정의
         # 제공된 코드 기반 생성자 시그니처 반영
         def __init__(self, model_name='dummy', device=None, use_fp16=False):
-             print(f"   (Simulating Dummy BGEM3EmbeddingFunction initialization - Library not available) Model: {model_name}, Device: {device}, use_fp16={use_fp16}")
+             logger.info(f"   (Simulating Dummy BGEM3EmbeddingFunction initialization - Library not available) Model: {model_name}, Device: {device}, use_fp16={use_fp16}")
              self._model_name = model_name
              self._device = device
              self._use_fp16 = use_fp16
@@ -44,11 +44,11 @@ except ImportError as e:
 
         # encode 메서드 시뮬레이션
         def encode(self, sentences): # <-- encode 메서드는 list[str] 입력만 받음 (제공된 코드 기반)
-             print(f"   (Simulating Dummy BGEM3EmbeddingFunction.encode) Encoding {len(sentences)} sentences...")
+             logger.info(f"   (Simulating Dummy BGEM3EmbeddingFunction.encode) Encoding {len(sentences)} sentences...")
              import random # 모킹용
              # 결과는 List[List[float]] 형태로 시뮬레이션
              mock_embeddings = [[random.random() for _ in range(self._mock_dimension)] for _ in sentences]
-             print(f"   (Simulating successful encode of {len(sentences)} embeddings)")
+             logger.info(f"   (Simulating successful encode of {len(sentences)} embeddings)")
              return mock_embeddings
 
     # BaseTokenizer 더미 클래스는 DoclingChunkerAdapter에서 사용되므로 여기서는 필요 없습니다.
@@ -72,13 +72,13 @@ from domain.models import DocumentChunk, EmbeddingVector # 입/출력 도메인 
 class DummyEmbedderAdapter(EmbeddingGenerationPort):
     """pymilvus 라이브러리 부재 시 사용되는 임베딩 어댑터 더미."""
     def __init__(self, model_name: str = "dummy-bge-m3", device: Optional[str] = "cpu"):
-        print(f"DummyEmbedderAdapter initialized for model '{model_name}' on device '{device}'.")
+        logger.info(f"DummyEmbedderAdapter initialized for model '{model_name}' on device '{device}'.")
         self._model_name = model_name
         self._device = device
         self._mock_dimension = 1024 # BGE-M3 차원 (1024로 추정)
 
     def generate_embeddings(self, chunks: List[DocumentChunk]) -> List[EmbeddingVector]:
-        print(f"DummyEmbedderAdapter: Using mock embeddings for {len(chunks)} chunks...")
+        logger.info(f"DummyEmbedderAdapter: Using mock embeddings for {len(chunks)} chunks...")
         if not chunks:
             return []
         # Mock embedding generation logic (same as before)
@@ -87,7 +87,7 @@ class DummyEmbedderAdapter(EmbeddingGenerationPort):
         for i, vector in enumerate(mock_embeddings_list):
             chunk_metadata_ref = chunks[i].metadata.copy()
             embeddings.append(EmbeddingVector(vector=vector, metadata=chunk_metadata_ref))
-        print(f"DummyEmbedderAdapter: Generated {len(embeddings)} mock embeddings.")
+        logger.info(f"DummyEmbedderAdapter: Generated {len(embeddings)} mock embeddings.")
         return embeddings
 
 
@@ -113,14 +113,14 @@ class BgeM3EmbedderAdapter(EmbeddingGenerationPort):
              use_fp16: BGEM3EmbeddingFunction에 전달될 FP16 사용 여부. CPU 사용 시 False 권장.
              # 기타 BGEM3EmbeddingFunction 초기화 파라미터들 (pymilvus 문서 확인 필요)
         """
-        print(f"BgeM3EmbedderAdapter: Initializing for model '{model_name}' on device '{device or 'auto'}' with use_fp16={use_fp16}...")
+        logger.info(f"BgeM3EmbedderAdapter: Initializing for model '{model_name}' on device '{device or 'auto'}' with use_fp16={use_fp16}...")
 
         self._model_name = model_name
         self._device = device
         self._use_fp16 = use_fp16
         # self._api_key_port = api_key_port # API 키 포트는 여기서 직접 사용되지 않는 것으로 보임 (BGEM3EmbeddingFunction이 내부적으로 처리 추정)
 
-        self._embedding_function: Optional[BGEM3EmbeddingFunction] = None # BGEM3EmbeddingFunction 인스턴스
+        self._embedding_function: Optional[BGEM3EmbeddingFunction] = None
 
         # BGEM3EmbeddingFunction은 pymilvus 라이브러리에 포함되어 있으므로,
         # pymilvus 임포트 성공 여부(_milvus_library_available 플래그)를 확인하여 초기화합니다.
@@ -132,7 +132,7 @@ class BgeM3EmbedderAdapter(EmbeddingGenerationPort):
         # --- ★★★ BGEM3EmbeddingFunction 인스턴스 생성 ★★★ ---
         # BGEM3EmbeddingFunction 클래스가 임포트 가능할 때만 이 코드가 실행됩니다.
         if 'BGEM3EmbeddingFunction' in globals() and isinstance(BGEM3EmbeddingFunction, type): # <-- 클래스가 정의되었는지 확인 (ImportError 안 났다는 의미)
-             print(f"   Attempting to instantiate BGEM3EmbeddingFunction for model '{self._model_name}'...")
+             logger.info(f"   Attempting to instantiate BGEM3EmbeddingFunction for model '{self._model_name}'...")
              try:
                  # 제공된 코드 스니펫의 BGEM3EmbeddingFunction 생성자 시그니처 사용
                  self._embedding_function = BGEM3EmbeddingFunction(
@@ -141,21 +141,21 @@ class BgeM3EmbedderAdapter(EmbeddingGenerationPort):
                      use_fp16=self._use_fp16,
                      batch_size=16  # 배치 사이즈 명시적 설정
                  )
-                 print("BgeM3EmbedderAdapter: BGEM3EmbeddingFunction instance created successfully.")
+                 logger.info("BgeM3EmbedderAdapter: BGEM3EmbeddingFunction instance created successfully.")
              except Exception as e: # BGEM3EmbeddingFunction 초기화 중 발생할 수 있는 예외 처리
-                 print(f"BgeM3EmbedderAdapter: Error initializing BGEM3EmbeddingFunction: {e}")
+                 logger.error(f"BgeM3EmbedderAdapter: Error initializing BGEM3EmbeddingFunction: {e}")
                  self._embedding_function = None # 초기화 실패 시 None
                  # 초기화 실패 시 EmbeddingError 예외 발생 고려
                  # raise EmbeddingError(f"Failed to initialize BGEM3EmbeddingFunction: {e}") from e
         else:
-             print("BgeM3EmbedderAdapter: BGEM3EmbeddingFunction class not available. Likely pymilvus not fully imported.")
+             logger.warning("BgeM3EmbedderAdapter: BGEM3EmbeddingFunction class not available. Likely pymilvus not fully imported.")
              self._embedding_function = None # 클래스 자체가 없으면 None
 
 
         if self._embedding_function is None:
-            print("BgeM3EmbedderAdapter: BGEM3EmbeddingFunction is not available or failed to initialize. Generate operations will use mock embeddings.")
+            logger.info("BgeM3EmbedderAdapter: BGEM3EmbeddingFunction is not available or failed to initialize. Generate operations will use mock embeddings.")
         else:
-             print("BgeM3EmbedderAdapter: Adapter successfully initialized with BGEM3EmbeddingFunction.")
+             logger.info("BgeM3EmbedderAdapter: Adapter successfully initialized with BGEM3EmbeddingFunction.")
 
 
     # Hugging Face transformers 사용 시 필요한 풀링 함수는 이제 필요 없습니다.
@@ -164,16 +164,16 @@ class BgeM3EmbedderAdapter(EmbeddingGenerationPort):
         texts = [chunk.content for chunk in chunks]
         
         if not chunks:
-            print("BgeM3EmbedderAdapter: No chunks to embed. Skipping embedding generation.")
+            logger.info("BgeM3EmbedderAdapter: No chunks to embed. Skipping embedding generation.")
             return [] # 청크가 없으면 빈 목록 반환
 
         # self._embedding_function 인스턴스가 유효하면 실제 임베딩 실행
         if self._embedding_function is not None:
-            print("BgeM3EmbedderAdapter: Using configured BGEM3EmbeddingFunction.")
+            logger.info("BgeM3EmbedderAdapter: Using configured BGEM3EmbeddingFunction.")
             try:
                 # 1단계: DocumentChunk 목록에서 텍스트 내용 목록 준비
                 chunk_contents = [chunk.content for chunk in chunks]
-                print(f"   Encoding {len(chunk_contents)} text snippets...")
+                logger.info(f"   Encoding {len(chunk_contents)} text snippets...")
 
                 # 2단계: 문서 임베딩 생성 (encode_documents 메서드 사용)
                 try:
@@ -185,11 +185,11 @@ class BgeM3EmbedderAdapter(EmbeddingGenerationPort):
                     
                     # 딕셔너리에서 dense 임베딩 추출
                     dense_embeddings = embedding_results_dict["dense"]
-                    print(f"   Successfully generated {len(dense_embeddings)} raw vectors using BGEM3EmbeddingFunction.")
+                    logger.info(f"   Successfully generated {len(dense_embeddings)} raw vectors using BGEM3EmbeddingFunction.")
                     
                     # 생성된 벡터 수와 청크 수가 일치하는지 확인
                     if len(chunks) != len(dense_embeddings):
-                        print(f"Warning: Number of chunks ({len(chunks)}) and generated embeddings ({len(dense_embeddings)}) do not match.")
+                        logger.warning(f"Warning: Number of chunks ({len(chunks)}) and generated embeddings ({len(dense_embeddings)}) do not match.")
                         raise EmbeddingError("Chunk and embedding count mismatch after encoding.")
                     
                     # dense_embeddings를 EmbeddingVector로 변환
@@ -199,18 +199,18 @@ class BgeM3EmbedderAdapter(EmbeddingGenerationPort):
                         embeddings.append(EmbeddingVector(vector=vector, metadata=chunk_metadata_ref))
                     
                 except Exception as e:
-                    print(f"BgeM3EmbedderAdapter: 임베딩 생성 중 오류 발생 - {e}")
+                    logger.error(f"BgeM3EmbedderAdapter: 임베딩 생성 중 오류 발생 - {e}")
                     raise EmbeddingError(f"BGEM3EmbeddingFunction으로 임베딩 생성 실패: {e}") from e
 
-                print(f"BgeM3EmbedderAdapter: Mapping complete. Created {len(embeddings)} EmbeddingVector objects.")
-                print(f"[EMBEDDING] 성공: {len(embeddings)}개 임베딩 벡터 생성")
+                logger.info(f"BgeM3EmbedderAdapter: Mapping complete. Created {len(embeddings)} EmbeddingVector objects.")
+                logger.info(f"[EMBEDDING] 성공: {len(embeddings)}개 임베딩 벡터 생성")
                 if embeddings:
-                    print(f"  첫 임베딩 벡터 차원: {len(embeddings[0].vector)}")
+                    logger.info(f"  첫 임베딩 벡터 차원: {len(embeddings[0].vector)}")
                 
                 return embeddings
 
             except Exception as e:
-                print(f"BgeM3EmbedderAdapter: Error during actual embedding generation - {e}")
+                logger.error(f"BgeM3EmbedderAdapter: Error during actual embedding generation - {e}")
                 raise EmbeddingError(f"Failed to generate embeddings using BGEM3EmbeddingFunction: {e}") from e
 
         else:
@@ -218,14 +218,14 @@ class BgeM3EmbedderAdapter(EmbeddingGenerationPort):
             # ---> 모킹 벡터 생성 (이전과 동일) <---
             mock_dimension = 1024 # BGE-M3 차원 (1024로 추정)
             embedding_results = [[random.random() for _ in range(mock_dimension)] for _ in chunks]
-            print(f"   Generated {len(embedding_results)} mock vectors.")
+            logger.info(f"   Generated {len(embedding_results)} mock vectors.")
 
 
         # --- ★★★ 생성된 벡터 목록을 EmbeddingVector 도메인 모델 목록으로 변환 ★★★ ---
         # 어댑터의 책임: 외부 기술 결과(벡터 리스트)를 내부 도메인 모델(EmbeddingVector 리스트)로 매핑
         embeddings: List[EmbeddingVector] = []
         try:
-            print("   Mapping vectors to EmbeddingVector domain models...")
+            logger.info("   Mapping vectors to EmbeddingVector domain models...")
             result = []
             for i, vector in enumerate(dense_vectors):
                 if i < len(chunks):
@@ -238,5 +238,5 @@ class BgeM3EmbedderAdapter(EmbeddingGenerationPort):
             
         except Exception as e:
             error_msg = f"Error during actual embedding generation - {e}"
-            print(error_msg)
+            logger.error(error_msg)
             raise EmbeddingError(error_msg)

@@ -1,8 +1,16 @@
 # src/adapters/primary/api_adapter.py
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, status, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, status, Depends, BackgroundTasks
 from typing import List, Dict, Any
 import logging
+from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
+import time
+import asyncio
+import json
+from pathlib import Path
+import os
+import mimetypes
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -64,7 +72,7 @@ def setup_api_routes(input_port: DocumentProcessingInputPort) -> APIRouter:
         외부 클라이언트로부터 문서를 업로드 받아 애플리케이션 코어의 문서 처리 프로세스를 시작시키는 API 엔드포인트입니다.
         이 어댑터는 실제 파싱이나 청킹 로직을 수행하지 않고, 해당 작업을 애플리케이션 코어에 위임합니다.
         """
-        print(f"[API] 엔드포인트 호출 시작: 파일명 = {file.filename}")
+        logger.info(f"[API] 엔드포인트 호출 시작: 파일명 = {file.filename}")
         if not file.filename:
              raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -96,20 +104,15 @@ def setup_api_routes(input_port: DocumentProcessingInputPort) -> APIRouter:
             #    외부 클라이언트에게 응답할 형식으로 변환합니다.
             #    FastAPI의 response_model=List[DocumentChunk] 설정이 이 변환(파이단틱 모델 직렬화)을 자동으로 처리해 줍니다.
             if isinstance(processed_result, list):
-                return {
-                    "status": "success",
-                    "count": len(processed_result)
-                }
+                # API 스펙에 맞춰 List[DocumentChunk]를 반환합니다
+                return processed_result  # 리스트 타입을 그대로 반환
             elif hasattr(processed_result, 'metadata'):
-                return {
-                    "status": "success",
-                    "metadata": processed_result.metadata
-                }
+                # 단일 DocumentChunk 객체인 경우 리스트로 감싸서 반환
+                return [processed_result]
             else:
-                return {
-                    "status": "success",
-                    "result": "Document processed"
-                }
+                # 빈 리스트를 반환하여 List[DocumentChunk] 타입을 만족시킵니다
+                logger.warning("Unknown result type from use case, returning empty list")
+                return []
 
         except Exception as e:
             # 처리 중 발생한 예외를 잡아서 적절한 HTTP 오류 응답으로 변환합니다.
@@ -159,3 +162,16 @@ def setup_api_routes(input_port: DocumentProcessingInputPort) -> APIRouter:
 #
 # # --- 5. 앱 실행 (uvicorn 등 사용) ---
 # # 예: uvicorn main:app --reload
+
+@router.post("/upload_document", tags=["문서 업로드"])
+async def upload_document(
+    background_tasks: BackgroundTasks, 
+    file: UploadFile = File(...)
+):
+    """
+    문서 파일을 업로드하여 처리 시스템으로 전달합니다.
+    """
+    logger.info(f"[API] 엔드포인트 호출 시작: 파일명 = {file.filename}")
+    
+    # 파일 확장자 검증 등의 로직 추가 가능
+    # ...

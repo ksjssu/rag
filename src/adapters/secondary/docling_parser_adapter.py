@@ -46,14 +46,14 @@ try:
     # 예: from docling.utils.utils import guess_format_from_extension # <-- 정확한 경로: docling/utils/utils.py
 
     _docling_available = True
-    print("Docling core libraries imported successfully.")
+    logger.info("Docling core libraries imported successfully.")
 except ImportError as e: # 임포트 실패 시 발생하는 예외 메시지를 출력하도록 수정
-    print(f"Warning: Docling library import failed. Import error: {e}") # <-- 실제 임포트 오류 메시지 출력
-    print("DoclingParserAdapter will use fallback decoding.")
+    logger.warning(f"Warning: Docling library import failed. Import error: {e}") # <-- 실제 임포트 오류 메시지 출력
+    logger.warning("DoclingParserAdapter will use fallback decoding.")
     _docling_available = False
     # --- Docling 클래스가 없을 경우 에러 방지를 위한 더미 클래스 정의 ---
     # (이전 더미 클래스 정의는 그대로 유지되어야 합니다.)
-    print("   Using dummy Docling classes.")
+    logger.info("   Using dummy Docling classes.")
     # Dummy 클래스 정의들...
 
 
@@ -406,19 +406,29 @@ class DoclingParserAdapter(DocumentParsingPort):
         """
         RawDocument를 Docling DocumentConverter로 파싱합니다.
         """
-        print("[DEBUG] parse 메서드 시작")
+        logger.info("[DEBUG] parse 메서드 시작")
+        
+        # 입력 검사 추가
+        if raw_document is None:
+            logger.error("DoclingParserAdapter: raw_document is None")
+            return ParsedDocument(content="", metadata={})
+        
         filename = raw_document.metadata.get('filename', 'unknown')
-        print(f"\n[PARSING] 시작: {filename}")
+        logger.info(f"\n[PARSING] 시작: {filename}")
+
+        if not hasattr(raw_document, 'content') or raw_document.content is None:
+            logger.warning("DoclingParserAdapter: raw_document.content is None or missing")
+            return ParsedDocument(content="", metadata=raw_document.metadata if hasattr(raw_document, 'metadata') else {})
 
         if not raw_document.content:
             logger.warning("DoclingParserAdapter: Empty document content received")
             return ParsedDocument(content="", metadata=raw_document.metadata)
 
         if not _docling_available or not self._converter:
-            print("[DEBUG] Docling 사용 불가 - 폴백 사용")
+            logger.info("[DEBUG] Docling 사용 불가 - 폴백 사용")
             return ParsedDocument(content=raw_document.content, metadata=raw_document.metadata)
         else:
-            print("[DEBUG] Docling 사용 가능 - 변환 시도")
+            logger.info("[DEBUG] Docling 사용 가능 - 변환 시도")
 
         try:
             # 입력 형식 확인 (수정된 부분)
@@ -482,15 +492,87 @@ class DoclingParserAdapter(DocumentParsingPort):
                 try:
                     if hasattr(doc, 'tables'):
                         for table in doc.tables:
+                            # TableData 객체를 사전(dict)으로 변환하여 저장
+                            table_data_dict = {}
+                            if hasattr(table, 'data'):
+                                # TableData 객체가 있는 경우 속성을 안전하게 확인하고 변환
+                                if hasattr(table.data, 'to_dict'):
+                                    # to_dict 메서드가 있으면 호출
+                                    table_data_dict = table.data.to_dict()
+                                elif hasattr(table.data, '__dict__'):
+                                    # __dict__ 속성이 있으면 사용
+                                    table_data_dict = vars(table.data)
+                                elif hasattr(table.data, 'rows') and hasattr(table.data, 'columns'):
+                                    # rows와 columns 속성이 있으면 사전에 담기
+                                    try:
+                                        rows_data = []
+                                        if isinstance(table.data.rows, list):
+                                            for row in table.data.rows:
+                                                if hasattr(row, 'cells') and isinstance(row.cells, list):
+                                                    row_cells = [cell.text if hasattr(cell, 'text') else str(cell) for cell in row.cells]
+                                                    rows_data.append(row_cells)
+                                                else:
+                                                    rows_data.append(str(row))
+                                        
+                                        table_data_dict = {
+                                            'rows': rows_data,
+                                            'columns': len(table.data.columns) if hasattr(table.data.columns, '__len__') else 0
+                                        }
+                                    except Exception as cell_e:
+                                        logger.error(f"테이블 셀 데이터 변환 오류: {cell_e}")
+                                        table_data_dict = {'error': '테이블 데이터 변환 실패'}
+                                else:
+                                    # 그 외의 경우 문자열로 표현
+                                    table_data_dict = {'data': str(table.data)}
+                            
                             tables.append({
-                                'structure': table.data,
+                                'structure': table_data_dict,  # 변환된 dict 형태로 저장
                                 'content': table.text if hasattr(table, 'text') else "",
                                 'position': table.prov[0] if hasattr(table, 'prov') and table.prov else None
                             })
+                    
                     if hasattr(doc, 'table_structures'):
-                        table_structures = doc.table_structures
+                        # table_structures도 안전하게 변환
+                        if isinstance(doc.table_structures, list):
+                            for ts in doc.table_structures:
+                                if isinstance(ts, dict):
+                                    table_structures.append(ts)
+                                else:
+                                    # dict가 아니면 변환 시도
+                                    try:
+                                        if hasattr(ts, 'to_dict'):
+                                            table_structures.append(ts.to_dict())
+                                        elif hasattr(ts, '__dict__'):
+                                            table_structures.append(vars(ts))
+                                        else:
+                                            table_structures.append({'data': str(ts)})
+                                    except Exception as ts_e:
+                                        logger.error(f"테이블 구조 변환 오류: {ts_e}")
+                                        table_structures.append({'error': '테이블 구조 변환 실패'})
+                        else:
+                            logger.warning("table_structures가 리스트 형태가 아님")
+                    
                     if hasattr(doc, 'table_cell_matches'):
-                        table_cell_matches = doc.table_cell_matches
+                        # table_cell_matches도 안전하게 변환
+                        if isinstance(doc.table_cell_matches, list):
+                            for tcm in doc.table_cell_matches:
+                                if isinstance(tcm, dict):
+                                    table_cell_matches.append(tcm)
+                                else:
+                                    # dict가 아니면 변환 시도
+                                    try:
+                                        if hasattr(tcm, 'to_dict'):
+                                            table_cell_matches.append(tcm.to_dict())
+                                        elif hasattr(tcm, '__dict__'):
+                                            table_cell_matches.append(vars(tcm))
+                                        else:
+                                            table_cell_matches.append({'data': str(tcm)})
+                                    except Exception as tcm_e:
+                                        logger.error(f"테이블 셀 매칭 변환 오류: {tcm_e}")
+                                        table_cell_matches.append({'error': '테이블 셀 매칭 변환 실패'})
+                        else:
+                            logger.warning("table_cell_matches가 리스트 형태가 아님")
+
                 except Exception as e:
                     logger.error(f"Table extraction error: {e}")
                 
@@ -500,16 +582,20 @@ class DoclingParserAdapter(DocumentParsingPort):
                 image_descriptions = []
                 try:
                     if hasattr(doc, 'images'):
+                        logger.info(f"doc.images: {doc.images}")
+                        logger.info(f"doc 객체 타입: {type(doc)}")
                         for image in doc.images:
                             images.append({
                                 'data': image.data,
                                 'description': image.description,
                                 'position': image.position
                             })
+                        logger.info(f"[IMAGES] images: {images}")
                     if hasattr(doc, 'image_classifications'):
                         image_classifications = doc.image_classifications
                     if hasattr(doc, 'image_descriptions'):
                         image_descriptions = doc.image_descriptions
+                        logger.info(f"[IMAGE DESC] image_descriptions: {image_descriptions}")
                 except Exception as e:
                     logger.error(f"Image extraction error: {e}")
                 
@@ -575,8 +661,10 @@ class DoclingParserAdapter(DocumentParsingPort):
                 try:
                     if hasattr(doc, 'ocr_results'):
                         ocr_results = doc.ocr_results
+                        logger.info(f"[OCR] ocr_results: {ocr_results}")
                     if hasattr(doc, 'ocr_confidence'):
                         ocr_confidence = doc.ocr_confidence
+                        logger.info(f"[OCR] ocr_confidence: {ocr_confidence}")
                 except Exception as e:
                     logger.error(f"OCR information extraction error: {e}")
                 
@@ -584,114 +672,214 @@ class DoclingParserAdapter(DocumentParsingPort):
                 document_text = ""
                 if "glyph<" in backend_text or backend_text.strip() == "":
                     document_text = ocr_text
-                    print("[PARSING] 글리프 감지됨: OCR 텍스트 사용")
+                    logger.info("[PARSING] 글리프 감지됨: OCR 텍스트 사용")
                 else:
                     document_text = backend_text
-                    print("[PARSING] 정상 텍스트: 백엔드 텍스트 사용")
+                    logger.info("[PARSING] 정상 텍스트: 백엔드 텍스트 사용")
                 
                 # 텍스트 정제
                 document_text = re.sub(r'glyph<[^>]+>', '', document_text)
                 document_text = re.sub(r'<[^>]+>', '', document_text)
                 
-                print(f"[PARSING] 최종 추출 텍스트 길이: {len(document_text)} 글자")
+                logger.info(f"[PARSING] 최종 추출 텍스트 길이: {len(document_text)} 글자")
                 
                 # 샘플 출력
                 if document_text:
-                    print("\n===== 추출된 텍스트 샘플 =====")
-                    print(document_text[:200] + "..." if len(document_text) > 200 else document_text)
-                    print("==============================\n")
-                
-                # 테이블 정보 추출
-                tables = []
-                if hasattr(doc, 'tables'):
-                    for table in doc.tables:
-                        tables.append({
-                            'structure': table.data,
-                            'content': table.text if hasattr(table, 'text') else "",
-                            'position': table.prov[0] if hasattr(table, 'prov') and table.prov else None
-                        })
-                
-                # 이미지 정보 추출
-                images = []
-                if hasattr(doc, 'images'):
-                    for image in doc.images:
-                        images.append({
-                            'data': image.data,
-                            'description': image.description,
-                            'position': image.position
-                        })
+                    logger.info("\n===== 추출된 텍스트 샘플 =====")
+                    text_sample = ""
+                    try:
+                        if document_text and isinstance(document_text, str):
+                            if len(document_text) > 200:
+                                text_sample = document_text[0:200] + "..."
+                            else:
+                                text_sample = document_text
+                        else:
+                            # 문자열이 아닌 경우 안전하게 변환
+                            text_sample = str(document_text) if document_text is not None else ""
+                    except Exception as sample_e:
+                        logger.error(f"텍스트 샘플 생성 오류: {sample_e}")
+                        text_sample = "[텍스트 샘플 생성 실패]"
+                    
+                    logger.info(text_sample)
+                    logger.info("==============================\n")
                 
                 # 파싱 결과 출력 추가
                 def print_parsing_results(parsed_doc: ParsedDocument):
-                    print("\n========== 파싱 결과 ==========")
-                    print(f"파일명: {filename}")
+                    logger.info("\n========== 파싱 결과 ==========")
+                    logger.info(f"파일명: {filename}")
                     
                     # 기본 텍스트 내용
                     if parsed_doc.content:
-                        print("\n[텍스트 내용 샘플]")
-                        content_preview = parsed_doc.content[:200] + "..." if len(parsed_doc.content) > 200 else parsed_doc.content
-                        print(content_preview)
+                        logger.info("\n[텍스트 내용 샘플]")
+                        try:
+                            content_preview = ""
+                            if parsed_doc.content and isinstance(parsed_doc.content, str):
+                                if len(parsed_doc.content) > 200:
+                                    content_preview = parsed_doc.content[0:200] + "..."
+                                else:
+                                    content_preview = parsed_doc.content
+                            else:
+                                # 문자열이 아닌 경우 안전하게 변환
+                                content_preview = str(parsed_doc.content) if parsed_doc.content is not None else ""
+                            logger.info(content_preview)
+                        except Exception as e:
+                            logger.error(f"텍스트 샘플 출력 오류: {e}")
+                            logger.info("[텍스트 샘플 출력 실패]")
                     
                     # 테이블 정보
                     if parsed_doc.tables:
-                        print(f"\n[테이블 수]: {len(parsed_doc.tables)}")
-                        for i, table in enumerate(parsed_doc.tables[:2], 1):  # 처음 2개만 출력
-                            print(f"\n테이블 {i} 미리보기:")
-                            print(f"- 구조: {table.get('structure', '정보 없음')}")
-                            print(f"- 위치: {table.get('position', '정보 없음')}")
+                        logger.info(f"\n[테이블 수]: {len(parsed_doc.tables)}")
+                        try:
+                            table_count = len(parsed_doc.tables)
+                            if table_count > 0:
+                                preview_count = min(2, table_count)
+                                for i in range(preview_count):
+                                    if i < table_count:  # 추가 안전 검사
+                                        table = parsed_doc.tables[i]
+                                        if isinstance(table, dict):
+                                            logger.info(f"\n테이블 {i+1} 미리보기:")
+                                            logger.info(f"- 구조: {table.get('structure', '정보 없음')}")
+                                            logger.info(f"- 위치: {table.get('position', '정보 없음')}")
+                        except Exception as table_e:
+                            logger.error(f"테이블 정보 출력 오류: {table_e}")
+                            logger.info("[테이블 정보 출력 실패]")
                     
                     # 이미지 정보
                     if parsed_doc.images:
-                        print(f"\n[이미지 수]: {len(parsed_doc.images)}")
-                        for i, img in enumerate(parsed_doc.images[:2], 1):  # 처음 2개만 출력
-                            print(f"\n이미지 {i} 정보:")
-                            print(f"- 설명: {img.get('description', '정보 없음')}")
-                            print(f"- 위치: {img.get('position', '정보 없음')}")
+                        logger.info(f"\n[이미지 수]: {len(parsed_doc.images)}")
+                        try:
+                            img_count = len(parsed_doc.images)
+                            if img_count > 0:
+                                preview_count = min(2, img_count)
+                                for i in range(preview_count):
+                                    if i < img_count:  # 추가 안전 검사
+                                        img = parsed_doc.images[i]
+                                        if isinstance(img, dict):
+                                            logger.info(f"\n이미지 {i+1} 정보:")
+                                            logger.info(f"- 설명: {img.get('description', '정보 없음')}")
+                                            logger.info(f"- 위치: {img.get('position', '정보 없음')}")
+                        except Exception as img_e:
+                            logger.error(f"이미지 정보 출력 오류: {img_e}")
+                            logger.info("[이미지 정보 출력 실패]")
                     
                     # 문서 구조
                     if parsed_doc.headings:
-                        print(f"\n[제목 구조 수]: {len(parsed_doc.headings)}")
-                        for i, heading in enumerate(parsed_doc.headings[:3], 1):  # 처음 3개만 출력
-                            print(f"제목 {i}: {heading}")
+                        logger.info(f"\n[제목 구조 수]: {len(parsed_doc.headings)}")
+                        try:
+                            if isinstance(parsed_doc.headings, list):
+                                headings_count = len(parsed_doc.headings)
+                                if headings_count > 0:
+                                    preview_count = min(3, headings_count)
+                                    headings_preview = []
+                                    for i in range(preview_count):
+                                        if i < headings_count:  # 추가 안전 검사
+                                            headings_preview.append(parsed_doc.headings[i])
+                            else:
+                                # 리스트가 아닌 경우 빈 리스트 사용
+                                logger.warning("제목이 리스트 형식이 아님")
+                        except Exception as headings_e:
+                            logger.error(f"[제목 구조 출력 오류]: {headings_e}")
                     
                     # OCR 결과
                     if parsed_doc.ocr_confidence is not None:
-                        print(f"\n[OCR 신뢰도]: {parsed_doc.ocr_confidence:.2%}")
+                        logger.info(f"\n[OCR 신뢰도]: {parsed_doc.ocr_confidence:.2%}")
                     
                     # 수식 정보
                     if parsed_doc.equations:
-                        print(f"\n[수식 수]: {len(parsed_doc.equations)}")
-                        for i, eq in enumerate(parsed_doc.equations[:2], 1):  # 처음 2개만 출력
-                            print(f"수식 {i}: {eq.get('content', '정보 없음')}")
+                        logger.info(f"\n[수식 수]: {len(parsed_doc.equations)}")
+                        try:
+                            eq_limit = min(2, len(parsed_doc.equations))
+                            for i, eq in enumerate(parsed_doc.equations[0:eq_limit], 1):  # 처음 2개만 출력
+                                logger.info(f"수식 {i}: {eq.get('content', '정보 없음')}")
+                        except Exception as e:
+                            logger.error(f"수식 정보 출력 오류: {e}")
+                            logger.info("[수식 정보 출력 실패]")
                     
-                    print("\n==============================\n")
+                    logger.info("\n==============================\n")
 
                 # FastAPI 응답 형식으로 변환
                 def create_api_response(parsed_doc: ParsedDocument) -> dict:
-                    return {
-                        "filename": filename,
-                        "content_preview": parsed_doc.content[:200] + "..." if len(parsed_doc.content) > 200 else parsed_doc.content,
-                        "metadata": {
-                            "tables_count": len(parsed_doc.tables),
-                            "images_count": len(parsed_doc.images),
-                            "headings_count": len(parsed_doc.headings),
-                            "ocr_confidence": parsed_doc.ocr_confidence,
-                            "equations_count": len(parsed_doc.equations)
-                        },
-                        "tables_preview": [
-                            {
-                                "structure": table.get('structure'),
-                                "position": table.get('position')
-                            } for table in parsed_doc.tables[:2]
-                        ],
-                        "images_preview": [
-                            {
-                                "description": img.get('description'),
-                                "position": img.get('position')
-                            } for img in parsed_doc.images[:2]
-                        ],
-                        "headings_preview": parsed_doc.headings[:3]
-                    }
+                    try:
+                        content_preview = ""
+                        if parsed_doc.content and isinstance(parsed_doc.content, str):
+                            if len(parsed_doc.content) > 200:
+                                content_preview = parsed_doc.content[0:200] + "..."
+                            else:
+                                content_preview = parsed_doc.content
+                        else:
+                            # 문자열이 아닌 경우 안전하게 변환
+                            content_preview = str(parsed_doc.content) if parsed_doc.content is not None else ""
+                            
+                        # 안전한 테이블 미리보기 생성
+                        tables_preview = []
+                        try:
+                            if parsed_doc.tables and isinstance(parsed_doc.tables, list):
+                                table_count = len(parsed_doc.tables)
+                                if table_count > 0:
+                                    preview_count = min(2, table_count)
+                                    for i in range(preview_count):
+                                        if i < table_count:  # 추가 안전 검사
+                                            table = parsed_doc.tables[i]
+                                            if isinstance(table, dict):
+                                                tables_preview.append({
+                                                    "structure": table.get('structure'),
+                                                    "position": table.get('position')
+                                                })
+                        except Exception as tables_e:
+                            logger.error(f"테이블 미리보기 생성 오류: {tables_e}")
+                            
+                        # 안전한 이미지 미리보기 생성
+                        images_preview = []
+                        try:
+                            if parsed_doc.images and isinstance(parsed_doc.images, list):
+                                img_count = len(parsed_doc.images)
+                                if img_count > 0:
+                                    preview_count = min(2, img_count)
+                                    for i in range(preview_count):
+                                        if i < img_count:  # 추가 안전 검사
+                                            img = parsed_doc.images[i]
+                                            if isinstance(img, dict):
+                                                images_preview.append({
+                                                    "description": img.get('description'),
+                                                    "position": img.get('position')
+                                                })
+                        except Exception as images_e:
+                            logger.error(f"이미지 미리보기 생성 오류: {images_e}")
+                            
+                        # 안전한 제목 미리보기 생성
+                        headings_preview = []
+                        try:
+                            if parsed_doc.headings and isinstance(parsed_doc.headings, list):
+                                headings_count = len(parsed_doc.headings)
+                                if headings_count > 0:
+                                    preview_count = min(3, headings_count)
+                                    headings_preview = []
+                                    for i in range(preview_count):
+                                        if i < headings_count:  # 추가 안전 검사
+                                            headings_preview.append(parsed_doc.headings[i])
+                        except Exception as headings_e:
+                            logger.error(f"제목 미리보기 생성 오류: {headings_e}")
+                            
+                        return {
+                            "filename": filename,
+                            "content_preview": content_preview,
+                            "metadata": {
+                                "tables_count": len(parsed_doc.tables) if parsed_doc.tables else 0,
+                                "images_count": len(parsed_doc.images) if parsed_doc.images else 0,
+                                "headings_count": len(parsed_doc.headings) if parsed_doc.headings else 0,
+                                "ocr_confidence": parsed_doc.ocr_confidence,
+                                "equations_count": len(parsed_doc.equations) if parsed_doc.equations else 0
+                            },
+                            "tables_preview": tables_preview,
+                            "images_preview": images_preview,
+                            "headings_preview": headings_preview
+                        }
+                    except Exception as e:
+                        logger.error(f"API 응답 생성 오류: {e}")
+                        return {
+                            "filename": filename,
+                            "error": "API 응답 생성 중 오류 발생"
+                        }
 
                 # 결과 출력
                 print_parsing_results(ParsedDocument(
@@ -740,14 +928,14 @@ class DoclingParserAdapter(DocumentParsingPort):
                 ))
                 
                 # 문서의 요소들 로깅 추가
-                print("\n----- 문서 요소들 디버깅 정보 -----")
+                logger.info("\n----- 문서 요소들 디버깅 정보 -----")
 
                 # 1. 레이아웃 요소 로깅
                 if hasattr(doc, 'layout') and doc.layout:
-                    print(f"[LAYOUT] 레이아웃 정보 있음 (타입: {type(doc.layout)})")
+                    logger.info(f"[LAYOUT] 레이아웃 정보 있음 (타입: {type(doc.layout)})")
                     if hasattr(doc.layout, 'items'):
                         layout_items = doc.layout.items if isinstance(doc.layout.items, list) else []
-                        print(f"  - 레이아웃 항목 수: {len(layout_items)}")
+                        logger.info(f"  - 레이아웃 항목 수: {len(layout_items)}")
                         
                         # 레이아웃 항목 타입 분포 확인
                         layout_types = {}
@@ -758,111 +946,198 @@ class DoclingParserAdapter(DocumentParsingPort):
                             else:
                                 layout_types[item_type] = 1
                         
-                        print(f"  - 레이아웃 항목 타입 분포: {layout_types}")
+                        logger.info(f"  - 레이아웃 항목 타입 분포: {layout_types}")
                 else:
-                    print("[LAYOUT] 레이아웃 정보 없음")
+                    logger.info("[LAYOUT] 레이아웃 정보 없음")
 
                 # 2. 테이블 구조 상세 로깅
                 if hasattr(doc, 'tables'):
-                    print(f"[TABLES] 테이블 수: {len(doc.tables)}")
-                    for i, table in enumerate(doc.tables[:2]):  # 처음 2개만 출력
-                        print(f"  - 테이블 {i+1} 정보:")
-                        print(f"    * 타입: {type(table).__name__}")
-                        print(f"    * 속성: {dir(table)[:10]}...")
-                        
-                        if hasattr(table, 'data'):
-                            print(f"    * 데이터 타입: {type(table.data).__name__}")
-                            # TableData 구조 확인
-                            if hasattr(table.data, 'rows') and hasattr(table.data, 'columns'):
-                                print(f"    * 행 수: {len(table.data.rows)}, 열 수: {len(table.data.columns)}")
-                        
-                        # 테이블 텍스트 샘플
-                        if hasattr(table, 'text'):
-                            text_sample = table.text[:50] + "..." if len(table.text) > 50 else table.text
-                            print(f"    * 텍스트 샘플: {text_sample}")
+                    try:
+                        table_count = getattr(doc, 'tables', [])
+                        if isinstance(table_count, list):
+                            logger.info(f"[TABLES] 테이블 수: {len(table_count)}")
+                            # 처음 2개만 출력
+                            preview_limit = min(2, len(table_count))
+                            for i in range(preview_limit):
+                                if i < len(table_count):  # 안전 검사
+                                    table = table_count[i]
+                                    logger.info(f"  - 테이블 {i+1} 정보:")
+                                    logger.info(f"    * 타입: {type(table).__name__}")
+                                    
+                                    # 속성 출력 수정
+                                    try:
+                                        attrs = dir(table)
+                                        if isinstance(attrs, (list, tuple)):
+                                            if len(attrs) > 10:
+                                                preview_attrs = attrs[0:10]
+                                            else:
+                                                preview_attrs = attrs
+                                        else:
+                                            preview_attrs = str(attrs)
+                                        logger.info(f"    * 속성: {preview_attrs}...")
+                                    except Exception as attr_e:
+                                        logger.info(f"    * 속성 출력 오류: {attr_e}")
+                                    
+                                    if hasattr(table, 'data'):
+                                        logger.info(f"    * 데이터 타입: {type(table.data).__name__}")
+                                        # TableData 구조 확인
+                                        if hasattr(table.data, 'rows') and hasattr(table.data, 'columns'):
+                                            logger.info(f"    * 행 수: {len(table.data.rows)}, 열 수: {len(table.data.columns)}")
+                                    
+                                    # 테이블 텍스트 샘플
+                                    if hasattr(table, 'text'):
+                                        try:
+                                            text_val = table.text
+                                            text_sample = None
+                                            if isinstance(text_val, str):
+                                                if len(text_val) > 50:
+                                                    text_sample = text_val[0:50] + "..."
+                                                else:
+                                                    text_sample = text_val
+                                            elif isinstance(text_val, (list, tuple)):
+                                                # 리스트의 경우 문자열 변환 후 슬라이싱
+                                                str_val = str(text_val)
+                                                if len(str_val) > 50:
+                                                    text_sample = str_val[0:50] + "..."
+                                                else:
+                                                    text_sample = str_val
+                                            else:
+                                                # 그 외의 경우 문자열 변환
+                                                text_sample = str(text_val)
+                                            logger.info(f"    * 텍스트 샘플: {text_sample}")
+                                        except Exception as text_e:
+                                            logger.error(f"    * 텍스트 샘플 출력 오류: {text_e}")
+                        else:
+                            logger.info(f"[TABLES] 테이블 정보가 리스트가 아님: {type(table_count).__name__}")
+                    except Exception as table_e:
+                        logger.error(f"[TABLES] 테이블 정보 출력 오류: {table_e}")
                 else:
-                    print("[TABLES] 테이블 정보 없음")
+                    logger.info("[TABLES] 테이블 정보 없음")
 
                 # 3. 이미지 정보 상세 로깅
                 if hasattr(doc, 'images'):
-                    print(f"[IMAGES] 이미지 수: {len(doc.images)}")
-                    for i, image in enumerate(doc.images[:2]):  # 처음 2개만 출력
-                        print(f"  - 이미지 {i+1} 정보:")
-                        print(f"    * 타입: {type(image).__name__}")
-                        print(f"    * 속성: {dir(image)[:10]}...")
-                        
-                        # 이미지 ID 확인
-                        if hasattr(image, 'id'):
-                            print(f"    * ID: {image.id}")
-                        
-                        # 이미지 설명 확인
-                        if hasattr(image, 'description'):
-                            desc = image.description
-                            desc_sample = desc[:50] + "..." if desc and len(desc) > 50 else desc
-                            print(f"    * 설명: {desc_sample}")
-                        
-                        # 이미지 위치 확인
-                        if hasattr(image, 'position'):
-                            print(f"    * 위치: {image.position}")
+                    try:
+                        image_list = getattr(doc, 'images', [])
+                        if isinstance(image_list, list):
+                            logger.info(f"[IMAGES] 이미지 수: {len(image_list)}")
+                            # 처음 2개만 출력
+                            preview_limit = min(2, len(image_list))
+                            for i in range(preview_limit):
+                                if i < len(image_list):  # 안전 검사
+                                    image = image_list[i]
+                                    logger.info(f"  - 이미지 {i+1} 정보:")
+                                    logger.info(f"    * 타입: {type(image).__name__}")
+                                    
+                                    # 속성 출력 수정
+                                    try:
+                                        img_attrs = dir(image)
+                                        if isinstance(img_attrs, (list, tuple)):
+                                            if len(img_attrs) > 10:
+                                                preview_attrs = img_attrs[0:10]
+                                            else:
+                                                preview_attrs = img_attrs
+                                        else:
+                                            preview_attrs = str(img_attrs)
+                                        logger.info(f"    * 속성: {preview_attrs}...")
+                                    except Exception as attr_e:
+                                        logger.error(f"    * 속성 출력 오류: {attr_e}")
+                                    
+                                    # 이미지 ID 확인
+                                    if hasattr(image, 'id'):
+                                        logger.info(f"    * ID: {image.id}")
+                                    
+                                    # 이미지 설명 확인
+                                    if hasattr(image, 'description'):
+                                        try:
+                                            desc = image.description
+                                            if desc and isinstance(desc, str):
+                                                if len(desc) > 50:
+                                                    desc_sample = desc[0:50] + "..."
+                                                else:
+                                                    desc_sample = desc
+                                            else:
+                                                desc_sample = str(desc) if desc is not None else "없음"
+                                            logger.info(f"    * 설명: {desc_sample}")
+                                        except Exception as desc_e:
+                                            logger.error(f"    * 설명 출력 오류: {desc_e}")
+                                    
+                                    # 이미지 위치 확인
+                                    if hasattr(image, 'position'):
+                                        logger.info(f"    * 위치: {image.position}")
+                        else:
+                            logger.info(f"[IMAGES] 이미지 정보가 리스트가 아님: {type(image_list).__name__}")
+                    except Exception as img_e:
+                        logger.error(f"[IMAGES] 이미지 정보 출력 오류: {img_e}")
                 else:
-                    print("[IMAGES] 이미지 정보 없음")
+                    logger.info("[IMAGES] 이미지 정보 없음")
 
                 # 4. 이미지 설명 로깅
                 if hasattr(doc, 'image_descriptions'):
-                    print(f"[IMAGE DESCRIPTIONS] 이미지 설명 수: {len(doc.image_descriptions)}")
-                    for i, desc in enumerate(doc.image_descriptions[:2]):  # 처음 2개만 출력
-                        print(f"  - 이미지 설명 {i+1}:")
-                        desc_text = None
-                        desc_id = None
-                        
-                        if isinstance(desc, dict):
-                            desc_text = desc.get('description', 'N/A')
-                            desc_id = desc.get('id', 'N/A')
-                        elif hasattr(desc, 'description'):
-                            desc_text = desc.description
-                            desc_id = getattr(desc, 'id', 'N/A')
-                        
-                        if desc_text:
-                            desc_sample = desc_text[:50] + "..." if len(desc_text) > 50 else desc_text
-                            print(f"    * ID: {desc_id}")
-                            print(f"    * 설명: {desc_sample}")
+                    logger.info(f"[IMAGE DESCRIPTIONS] 이미지 설명 수: {len(doc.image_descriptions)}")
+                    try:
+                        desc_limit = min(2, len(doc.image_descriptions))
+                        for i, desc in enumerate(doc.image_descriptions[0:desc_limit]):  # 처음 2개만 출력
+                            logger.info(f"  - 이미지 설명 {i+1}:")
+                            desc_text = None
+                            desc_id = None
+                            
+                            if isinstance(desc, dict):
+                                desc_text = desc.get('description', 'N/A')
+                                desc_id = desc.get('id', 'N/A')
+                            elif hasattr(desc, 'description'):
+                                desc_text = desc.description
+                                desc_id = getattr(desc, 'id', 'N/A')
+                            
+                            if desc_text:
+                                try:
+                                    if isinstance(desc_text, str) and len(desc_text) > 50:
+                                        desc_sample = desc_text[0:50] + "..."
+                                    else:
+                                        desc_sample = desc_text
+                                    logger.info(f"    * ID: {desc_id}")
+                                    logger.info(f"    * 설명: {desc_sample}")
+                                except Exception as sample_e:
+                                    logger.error(f"    * 설명 출력 오류: {sample_e}")
+                    except Exception as desc_e:
+                        logger.error(f"[IMAGE DESCRIPTIONS] 이미지 설명 정보 출력 오류: {desc_e}")
                 else:
-                    print("[IMAGE DESCRIPTIONS] 이미지 설명 정보 없음")
+                    logger.info("[IMAGE DESCRIPTIONS] 이미지 설명 정보 없음")
 
-                print("----- 디버깅 정보 종료 -----\n")
+                logger.info("----- 디버깅 정보 종료 -----\n")
 
-                # 여기에 이미지 추출 코드 추가
-                # 파일 형식별 이미지 추출 기능 함수 정의
-                def extract_images_from_file(file_bytes, file_extension, filename):
-                    # 이미지 추출 코드...
-                
-                # 이미지 처리 코드
-                    print("\n----- 추가 이미지 인식 시작 -----")
-                    extracted_images = []
-                    
-                    # 이미지 추출 및 처리 로직...
-                    
-                    return ParsedDocument(
-                        content=document_text,
-                        metadata=raw_document.metadata,
-                        tables=tables,
-                        images=images,
-                        equations=equations,
-                        code_blocks=code_blocks,
-                        headings=headings,
-                        paragraphs=paragraphs,
-                        lists=lists,
-                        layout=layout,
-                        page_info=page_info,
-                        ocr_results=ocr_results,
-                        ocr_confidence=ocr_confidence,
-                        image_classifications=image_classifications,
-                        image_descriptions=image_descriptions,
-                        table_structures=table_structures,
-                        table_cell_matches=table_cell_matches,
-                        code_enrichments=code_enrichments,
-                        formula_enrichments=formula_enrichments
-                    )
+                # 변환 과정의 마지막에 반환 전 검사 추가
+                # 모든 코드의 마지막에 결과 확인용 코드 추가 (return 전)
+                try:
+                    # 여기서 최종 결과를 반환하기 전에 검사
+                    if 'document_text' in locals() and document_text is not None:
+                        # 정상적으로 추출된 텍스트가 있는 경우
+                        # 최종 반환 객체 생성
+                        return_obj = ParsedDocument(
+                            content=document_text,
+                            metadata=raw_document.metadata,
+                            tables=tables if 'tables' in locals() else [],
+                            images=images if 'images' in locals() else [],
+                            equations=equations if 'equations' in locals() else [],
+                            code_blocks=code_blocks if 'code_blocks' in locals() else [],
+                            headings=headings if 'headings' in locals() else [],
+                            paragraphs=paragraphs if 'paragraphs' in locals() else [],
+                            lists=lists if 'lists' in locals() else [],
+                            layout=layout if 'layout' in locals() else None,
+                            page_info=page_info if 'page_info' in locals() else [],
+                            ocr_results=ocr_results if 'ocr_results' in locals() else None,
+                            ocr_confidence=ocr_confidence if 'ocr_confidence' in locals() else None,
+                            image_classifications=image_classifications if 'image_classifications' in locals() else [],
+                            image_descriptions=image_descriptions if 'image_descriptions' in locals() else [],
+                            table_structures=table_structures if 'table_structures' in locals() else [],
+                            table_cell_matches=table_cell_matches if 'table_cell_matches' in locals() else [],
+                            code_enrichments=code_enrichments if 'code_enrichments' in locals() else [],
+                            formula_enrichments=formula_enrichments if 'formula_enrichments' in locals() else []
+                        )
+                        logger.info(f"DoclingParserAdapter: 파싱 성공, 텍스트 길이: {len(document_text)}")
+                        return return_obj
+                except Exception as final_e:
+                    logger.error(f"DoclingParserAdapter: 최종 결과 생성 중 오류 발생 - {final_e}")
+            
             else:
                 logger.error(f"DoclingParserAdapter: Document conversion failed with status {result.status}")
                 if result.errors:
@@ -875,6 +1150,10 @@ class DoclingParserAdapter(DocumentParsingPort):
         except Exception as e:
             logger.error(f"DoclingParserAdapter: Unexpected error during parsing: {e}")
             raise ParsingError(f"Unexpected error during parsing: {e}") from e
+
+        # 모든 처리가 실패했거나 예외가 발생한 경우 빈 결과 반환
+        logger.warning("DoclingParserAdapter: 파싱 실패 또는 문제 발생, 빈 결과 반환")
+        return ParsedDocument(content="", metadata=raw_document.metadata)
 
 # PDF 파이프라인 옵션 설정
 pdf_options = PdfPipelineOptions(
@@ -935,7 +1214,7 @@ parser_adapter = DoclingParserAdapter(
 
 # 파일 형식별 이미지 추출 기능
 def extract_images_from_file(file_bytes, file_extension, filename):
-    print(f"[이미지 추출] 시작: {filename} (형식: {file_extension})")
+    logger.info(f"[이미지 추출] 시작: {filename} (형식: {file_extension})")
     
     # 결과 저장용 리스트
     extracted_images = []
@@ -943,7 +1222,41 @@ def extract_images_from_file(file_bytes, file_extension, filename):
     try:
         # 1. PDF 파일 처리
         if file_extension.lower() == 'pdf':
-            return extract_images_from_pdf(file_bytes)
+            # PDF에서 이미지 추출하는 기능 (PyMuPDF 사용)
+            try:
+                import io
+                import fitz  # PyMuPDF
+                from PIL import Image
+                
+                pdf_document = fitz.open(stream=file_bytes, filetype="pdf")
+                img_index = 0
+                
+                for page_index in range(len(pdf_document)):
+                    page = pdf_document.load_page(page_index)
+                    image_list = page.get_images(full=True)
+                    
+                    for img_index, img_info in enumerate(image_list):
+                        try:
+                            xref = img_info[0]
+                            base_image = pdf_document.extract_image(xref)
+                            image_bytes = base_image["image"]
+                            img = Image.open(io.BytesIO(image_bytes))
+                            
+                            extracted_images.append({
+                                'data': img,
+                                'description': f"Image from page {page_index + 1}",
+                                'position': {"page": page_index + 1},
+                                'id': f"pdf_img_{page_index}_{img_index}"
+                            })
+                        except Exception as e:
+                            logger.error(f"[이미지 추출] PDF 이미지 처리 오류: {e}")
+                
+                pdf_document.close()
+                logger.info(f"[이미지 추출] PDF에서 {len(extracted_images)}개 이미지 추출됨")
+            except ImportError:
+                logger.warning("[이미지 추출] PyMuPDF 라이브러리가 설치되지 않았습니다.")
+            except Exception as e:
+                logger.error(f"[이미지 추출] PDF 처리 오류: {e}")
             
         # 2. DOCX 파일 처리
         elif file_extension.lower() in ['docx', 'doc']:
@@ -968,9 +1281,9 @@ def extract_images_from_file(file_bytes, file_extension, filename):
                         })
                         img_index += 1
                     except Exception as e:
-                        print(f"[이미지 추출] DOCX 이미지 처리 오류: {e}")
+                        logger.error(f"[이미지 추출] DOCX 이미지 처리 오류: {e}")
             
-            print(f"[이미지 추출] DOCX에서 {len(extracted_images)}개 이미지 추출됨")
+            logger.info(f"[이미지 추출] DOCX에서 {len(extracted_images)}개 이미지 추출됨")
             
         # 3. PPTX 파일 처리
         elif file_extension.lower() in ['pptx', 'ppt']:
@@ -996,9 +1309,9 @@ def extract_images_from_file(file_bytes, file_extension, filename):
                             })
                             img_index += 1
                         except Exception as e:
-                            print(f"[이미지 추출] PPTX 이미지 처리 오류: {e}")
+                            logger.error(f"[이미지 추출] PPTX 이미지 처리 오류: {e}")
             
-            print(f"[이미지 추출] PPTX에서 {len(extracted_images)}개 이미지 추출됨")
+            logger.info(f"[이미지 추출] PPTX에서 {len(extracted_images)}개 이미지 추출됨")
             
         # 4. XLSX 파일 처리
         elif file_extension.lower() in ['xlsx', 'xls']:
@@ -1024,9 +1337,9 @@ def extract_images_from_file(file_bytes, file_extension, filename):
                         })
                         img_index += 1
                     except Exception as e:
-                        print(f"[이미지 추출] XLSX 이미지 처리 오류: {e}")
+                        logger.error(f"[이미지 추출] XLSX 이미지 처리 오류: {e}")
             
-            print(f"[이미지 추출] XLSX에서 {len(extracted_images)}개 이미지 추출됨")
+            logger.info(f"[이미지 추출] XLSX에서 {len(extracted_images)}개 이미지 추출됨")
             
         # 5. 이미지 파일 직접 처리
         elif file_extension.lower() in ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'tif']:
@@ -1041,9 +1354,9 @@ def extract_images_from_file(file_bytes, file_extension, filename):
                     'position': None,
                     'id': "original_image"
                 })
-                print(f"[이미지 추출] 이미지 파일 처리 완료")
+                logger.info(f"[이미지 추출] 이미지 파일 처리 완료")
             except Exception as e:
-                print(f"[이미지 추출] 이미지 파일 처리 오류: {e}")
+                logger.error(f"[이미지 추출] 이미지 파일 처리 오류: {e}")
                 
         # 6. HTML 파일 처리
         elif file_extension.lower() in ['html', 'htm']:
@@ -1077,38 +1390,20 @@ def extract_images_from_file(file_bytes, file_extension, filename):
                             })
                             img_index += 1
                     except Exception as e:
-                        print(f"[이미지 추출] HTML 이미지 처리 오류: {e}")
+                        logger.error(f"[이미지 추출] HTML 이미지 처리 오류: {e}")
                 
-                print(f"[이미지 추출] HTML에서 {len(extracted_images)}개 이미지 추출됨")
+                logger.info(f"[이미지 추출] HTML에서 {len(extracted_images)}개 이미지 추출됨")
             except Exception as e:
-                print(f"[이미지 추출] HTML 파싱 오류: {e}")
+                logger.error(f"[이미지 추출] HTML 파싱 오류: {e}")
                 
         # 7. 기타 파일 형식 - 확장 가능
         else:
-            print(f"[이미지 추출] 지원되지 않는 파일 형식: {file_extension}")
+            logger.warning(f"[이미지 추출] 지원되지 않는 파일 형식: {file_extension}")
     
     except ImportError as e:
-        print(f"[이미지 추출] 필요한 라이브러리 없음: {e}")
+        logger.error(f"[이미지 추출] 필요한 라이브러리 없음: {e}")
     except Exception as e:
-        print(f"[이미지 추출] 오류 발생: {e}")
+        logger.error(f"[이미지 추출] 오류 발생: {e}")
     
-    print(f"[이미지 추출] 완료: {len(extracted_images)}개 이미지 추출됨")
+    logger.info(f"[이미지 추출] 완료: {len(extracted_images)}개 이미지 추출됨")
     return extracted_images
-
-# 메인 이미지 처리 코드
-print("\n----- 추가 이미지 인식 시작 -----")
-extracted_images = []
-
-# 1. 기존 방식으로 인식된 이미지 확인
-if hasattr(doc, 'images') and doc.images:
-    print(f"[이미지 인식] 레이아웃 모델에서 {len(doc.images)}개 이미지 인식됨")
-else:
-    print("[이미지 인식] 레이아웃 모델에서 인식된 이미지 없음, 직접 추출 시도")
-    
-    # 2. 파일 확장자 확인
-    file_extension = filename.split('.')[-1] if '.' in filename else ''
-    
-    # 3. 직접 파일에서 이미지 추출
-    extracted_images = extract_images_from_file(raw_document.content, file_extension, filename)
-
-# 나머지 코드는 이전과 동일...

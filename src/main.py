@@ -13,6 +13,11 @@ import tempfile
 from pathlib import Path
 import sys
 
+# Add the src directory to the Python path
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
+
 from docling.datamodel.pipeline_options import (
     PdfPipelineOptions,
     EasyOcrOptions,
@@ -29,26 +34,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- 프라이머리 어댑터 설정 함수 임포트 ---
-# 기존: from adapters.primary.api_adapter import setup_api_routes
 from src.adapters.primary.api_adapter import setup_api_routes
 
 # --- 애플리케이션 계층 유스케이스 임포트 ---
-# 기존: from application.use_cases import IngestDocumentUseCase
-from .application.use_cases import IngestDocumentUseCase # <-- 상대 경로 임포트로 변경 (.application...)
+from src.application.use_cases import IngestDocumentUseCase
 
 # --- 세컨더리 어댑터 구현체 임포트 ---
-# 기존: from adapters.secondary.docling_parser_adapter import DoclingParserAdapter
-# 기존: from adapters.secondary.docling_chunker_adapter import DoclingChunkerAdapter
-# 기존: from adapters.secondary.bge_m3_embedder_adapter import BgeM3EmbedderAdapter
-# 기존: from adapters.secondary.env_apikey_adapter import EnvApiKeyAdapter
-# 기존: from adapters.secondary.milvus_adapter import MilvusAdapter
-
-from .adapters.secondary.docling_parser_adapter import DoclingParserAdapter # <-- 상대 경로 임포트로 변경 (.adapters...)
-from .adapters.secondary.docling_chunker_adapter import DoclingChunkerAdapter # <-- 상대 경로 임포트로 변경 (.adapters...)
-from .adapters.secondary.bge_m3_embedder_adapter import BgeM3EmbedderAdapter # <-- 상대 경로 임포트로 변경 (.adapters...)
-from .adapters.secondary.env_apikey_adapter import EnvApiKeyAdapter # <-- 상대 경로 임포트로 변경 (.adapters...)
-from .adapters.secondary.milvus_adapter import MilvusAdapter # <-- 상대 경로 임포트로 변경 (.adapters...)
-
+from src.adapters.secondary.docling_parser_adapter import DoclingParserAdapter
+from src.adapters.secondary.docling_chunker_adapter import DoclingChunkerAdapter
+from src.adapters.secondary.bge_m3_embedder_adapter import BgeM3EmbedderAdapter
+from src.adapters.secondary.env_apikey_adapter import EnvApiKeyAdapter
+from src.adapters.secondary.milvus_adapter import MilvusAdapter
 
 # --- 애플리케이션 설정 로드 ---
 # 실제 애플리케이션에서는 환경 변수, 설정 파일 등에서 로드합니다.
@@ -210,19 +206,20 @@ def create_app() -> FastAPI:
     #              logger.error(f"Error loading Milvus collection '{MILVUS_COLLECTION}' on startup: {e}")
 
     @app.middleware("http")
-    async def log_requests(request, call_next):
-        print(f"요청 수신: {request.url.path}", file=sys.stderr)
+    async def log_requests(request: Request, call_next):
+        """HTTP 요청 및 응답을 로깅하는 미들웨어"""
+        logger.info(f"요청 수신: {request.url.path}")
         try:
             response = await call_next(request)
-            print(f"응답 송신: {response.status_code}", file=sys.stderr)
+            logger.info(f"응답 송신: {response.status_code}")
             return response
         except Exception as e:
-            print(f"오류 발생: {str(e)}", file=sys.stderr)
+            logger.error(f"오류 발생: {str(e)}")
             raise
 
     logger.info("--- Application Assembly Complete ---")
     logger.info("Application is ready.")
-    print(f"__name__ 값: {__name__}")
+    logger.info(f"__name__ 값: {__name__}")
 
     # 조립이 완료된 FastAPI 애플리케이션 인스턴스 반환
     return app
@@ -231,7 +228,7 @@ def create_app() -> FastAPI:
 # MilvusAdapter 초기화 실패 시 create_app 내에서 예외가 발생하고 함수가 중단될 수 있습니다.
 try:
     app = create_app()
-    print(f"애플리케이션 조립 완료: {app}")
+    logger.info(f"애플리케이션 조립 완료: {app}")
 except Exception as e: # create_app 실행 중 발생하는 예외 처리
     logger.error(f"--- FATAL ERROR: Application startup failed during assembly --- Error: {e}")
     app = None # 앱 인스턴스 생성 실패

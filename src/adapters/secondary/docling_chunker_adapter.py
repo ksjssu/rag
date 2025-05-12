@@ -27,14 +27,14 @@ try:
 
 
     _docling_chunker_available = True
-    print("Docling chunking library (HybridChunker) imported successfully.")
+    logger.info("Docling chunking library (HybridChunker) imported successfully.")
 except ImportError as e: # 임포트 실패 시 발생하는 예외 메시지를 출력하도록 수정
-    print(f"Warning: Docling library import failed. Import error: {e}") # <-- 실제 임포트 오류 메시지 출력
-    print("DoclingChunkerAdapter will use simple line splitting.")
+    logger.warning(f"Warning: Docling library import failed. Import error: {e}") # <-- 실제 임포트 오류 메시지 출력
+    logger.warning("DoclingChunkerAdapter will use simple line splitting.")
     _docling_chunker_available = False
     # --- Docling 클래스가 없을 경우 에러 방지를 위한 더미 클래스 정의 ---
     # (기존 더미 클래스 정의는 그대로 유지)
-    print("   Using dummy Docling chunker classes.")
+    logger.info("   Using dummy Docling chunker classes.")
     # Dummy 클래스 정의들...
 
     # (이전에 정의했던 Dummy HybridChunker, MockDocChunkResult 클래스 등)
@@ -158,45 +158,7 @@ class DoclingChunkerAdapter(TextChunkingPort):
         """
         logger.info("DoclingChunkerAdapter: Starting chunking process...")
 
-        print("\n----- 청킹 단계 입력 데이터 확인 -----")
-        print(f"[CHUNKS] 원본 텍스트 길이: {len(parsed_document.content)} 글자")
-
-        # 테이블 정보가 있는지 확인
-        if parsed_document.tables:
-            print(f"[CHUNKS] 테이블 수: {len(parsed_document.tables)}")
-            for i, table in enumerate(parsed_document.tables[:2]):
-                print(f"  - 테이블 {i+1} 구조: {table.get('structure', '구조 정보 없음')[:50]}...")
-
-        # 이미지 정보가 있는지 확인
-        if parsed_document.images:
-            print(f"[CHUNKS] 이미지 수: {len(parsed_document.images)}")
-            for i, image in enumerate(parsed_document.images[:2]):
-                print(f"  - 이미지 {i+1} 설명: {image.get('description', '설명 없음')[:50]}...")
-
-        # 이미지 설명 정보가 있는지 확인
-        if parsed_document.image_descriptions:
-            print(f"[CHUNKS] 이미지 설명 정보 수: {len(parsed_document.image_descriptions)}")
-            for i, desc in enumerate(parsed_document.image_descriptions[:2]):
-                if isinstance(desc, dict):
-                    img_id = desc.get('id', 'N/A')
-                    img_desc = desc.get('description', 'N/A')
-                    print(f"  - 설명 {i+1}: ID={img_id}, 내용={img_desc[:50]}...")
-
-        # 내부 Docling 문서 객체가 있는지 확인
-        if '__internal_docling_document__' in parsed_document.metadata:
-            print("[CHUNKS] Docling 내부 문서 객체 있음")
-            docling_doc = parsed_document.metadata['__internal_docling_document__']
-            
-            # 문서 객체가 레이아웃 정보를 가지고 있는지 확인
-            if hasattr(docling_doc, 'layout'):
-                layout = docling_doc.layout
-                print(f"  - 레이아웃 정보 있음: {type(layout).__name__}")
-                if hasattr(layout, 'items'):
-                    print(f"  - 레이아웃 항목 수: {len(layout.items) if isinstance(layout.items, list) else 'N/A'}")
-        else:
-            print("[CHUNKS] Docling 내부 문서 객체 없음")
-
-        print("----- 청킹 단계 입력 데이터 확인 종료 -----\n")
+        self._debug_parsed_content(parsed_document)
 
         chunks: List[DocumentChunk] = []
         # 파서 어댑터에서 ParsedDocument 메타데이터에 담아 전달한 Docling 내부 문서 객체를 추출
@@ -274,7 +236,7 @@ class DoclingChunkerAdapter(TextChunkingPort):
                                 
                                 # 이미지 설명 확인하여 출력
                                 if "image_description" in current_chunk_metadata:
-                                    print(f"  이미지 설명: {current_chunk_metadata['image_description']}")
+                                    logger.info(f"  이미지 설명: {current_chunk_metadata['image_description']}")
                             
                             # 3. 수식 소스 확인
                             elif hasattr(docling_meta_object, 'equation_ref') or 'formula' in str(docling_meta_object):
@@ -337,30 +299,223 @@ class DoclingChunkerAdapter(TextChunkingPort):
 
             logger.info(f"DoclingChunkerAdapter: Chunking process finished. Generated {len(chunks)} chunks.")
 
-        print(f"[CHUNKING] 성공: {len(chunks)}개 청크 생성됨")
-        for i, chunk in enumerate(chunks[:3]):  # 처음 3개만 표시
-            print(f"  청크 {i+1}: {len(chunk.content)} 문자")
-            # 청크가 이미지 소스인 경우 설명 추가 출력
-            if chunk.metadata.get("source") == "image" and "image_description" in chunk.metadata:
-                print(f"  이미지 설명: {chunk.metadata.get('image_description')}")
-        if len(chunks) > 3:
-            print(f"  ... 외 {len(chunks)-3}개 청크")
+        # 청크 생성 결과 출력 (일부만)
+        logger.info(f"[CHUNKING] 성공: {len(chunks)}개 청크 생성됨")
+        # 미리보기 (첫 3개 청크)
+        display_limit = min(3, len(chunks))
+        for i in range(display_limit):
+            chunk = chunks[i]
+            logger.info(f"  청크 {i+1}: {len(chunk.content)} 문자")
+            
+            # 이미지 설명 정보 출력 (있는 경우)
+            if 'image_description' in chunk.metadata and chunk.metadata['image_description']:
+                desc_preview = str(chunk.metadata['image_description'])[:100]
+                if len(str(chunk.metadata['image_description'])) > 100:
+                    desc_preview += "..."
+                logger.info(f"  이미지 설명: {desc_preview}")
+
+        # 나머지 청크 수만 출력
+        if len(chunks) > display_limit:
+            logger.info(f"  ... 외 {len(chunks)-display_limit}개 청크")
 
         return chunks
 
     def chunk_text(self, text: str, metadata: Dict[str, Any]) -> List[DocumentChunk]:
-        print(f"[CHUNKING] 시작: 입력 텍스트 길이 {len(text)} 문자")
+        logger.info(f"[CHUNKING] 시작: 입력 텍스트 길이 {len(text)} 문자")
         
         # 기존 코드...
         
         # 청킹 성공 시
-        print(f"[CHUNKING] 성공: {len(chunks)}개 청크 생성됨")
-        for i, chunk in enumerate(chunks[:3]):  # 처음 3개만 표시
-            print(f"  청크 {i+1}: {len(chunk.content)} 문자")
-            # 청크가 이미지 소스인 경우 설명 추가 출력
-            if chunk.metadata.get("source") == "image" and "image_description" in chunk.metadata:
-                print(f"  이미지 설명: {chunk.metadata.get('image_description')}")
-        if len(chunks) > 3:
-            print(f"  ... 외 {len(chunks)-3}개 청크")
+        logger.info(f"[CHUNKING] 성공: {len(chunks)}개 청크 생성됨")
+        chunk_count = len(chunks)
+        for i in range(min(3, chunk_count)):  # 처음 3개만 표시
+            if i < chunk_count:  # 안전 검사
+                chunk = chunks[i]
+                logger.info(f"  청크 {i+1}: {len(chunk.content)} 문자")
+                # 청크가 이미지 소스인 경우 설명 추가 출력
+                if chunk.metadata.get("source") == "image" and "image_description" in chunk.metadata:
+                    img_desc = chunk.metadata.get('image_description', '')
+                    desc_preview = ""
+                    if isinstance(img_desc, str):
+                        if len(img_desc) > 50:
+                            desc_preview = img_desc[0:50] + "..."
+                        else:
+                            desc_preview = img_desc
+                    else:
+                        desc_preview = str(img_desc)
+                    logger.info(f"  이미지 설명: {desc_preview}")
+        if chunk_count > 3:
+            logger.info(f"  ... 외 {chunk_count-3}개 청크")
+        
+        return chunks
+
+    def _debug_parsed_content(self, parsed_document):
+        """입력 데이터 디버깅용 함수. 실제 청킹 전 파싱된 문서 내용 확인."""
+        try:
+            # 청킹 단계 입력 데이터 확인 (디버깅용)
+            logger.info("\n----- 청킹 단계 입력 데이터 확인 -----")
+            logger.info(f"[CHUNKS] 원본 텍스트 길이: {len(parsed_document.content)} 글자")
+            
+            # 테이블 정보 확인
+            table_count = 0
+            if hasattr(parsed_document, 'tables') and parsed_document.tables:
+                table_count = len(parsed_document.tables)
+                logger.info(f"[CHUNKS] 테이블 수: {table_count}")
+                
+                # 테이블 정보 샘플 (처음 2개만)
+                display_limit = min(2, table_count)
+                for i in range(display_limit):
+                    table = parsed_document.tables[i]
+                    # 테이블 구조 문자열 생성
+                    structure_str = "정보 없음"
+                    if isinstance(table, dict) and 'structure' in table:
+                        structure_str = str(table['structure'])[:100] + "..." if len(str(table['structure'])) > 100 else str(table['structure'])
+                    logger.info(f"  - 테이블 {i+1} 구조: {structure_str}")
+            
+            # 이미지 정보 확인
+            image_count = 0
+            if hasattr(parsed_document, 'images') and parsed_document.images:
+                image_count = len(parsed_document.images)
+                logger.info(f"[CHUNKS] 이미지 수: {image_count}")
+                
+                # 이미지 정보 샘플 (처음 2개만)
+                display_limit = min(2, image_count)
+                for i in range(display_limit):
+                    img = parsed_document.images[i]
+                    # 이미지 설명 문자열 생성
+                    description_str = "정보 없음"
+                    if isinstance(img, dict) and 'description' in img:
+                        description_str = str(img['description'])[:100] + "..." if len(str(img['description'])) > 100 else str(img['description'])
+                    logger.info(f"  - 이미지 {i+1} 설명: {description_str}")
+            
+            # 이미지 설명 정보 확인
+            desc_count = 0
+            if hasattr(parsed_document, 'image_descriptions') and parsed_document.image_descriptions:
+                desc_count = len(parsed_document.image_descriptions)
+                logger.info(f"[CHUNKS] 이미지 설명 정보 수: {desc_count}")
+                
+                # 이미지 설명 정보 샘플 (처음 2개만)
+                display_limit = min(2, desc_count)
+                for i in range(display_limit):
+                    desc = parsed_document.image_descriptions[i]
+                    # id와 설명 문자열 생성
+                    img_id = "알 수 없음"
+                    desc_preview = "정보 없음"
+                    
+                    if hasattr(desc, 'id'):
+                        img_id = str(desc.id)
+                    
+                    if hasattr(desc, 'text'):
+                        desc_text = desc.text
+                        desc_preview = str(desc_text)[:100] + "..." if len(str(desc_text)) > 100 else str(desc_text)
+                    
+                    logger.info(f"  - 설명 {i+1}: ID={img_id}, 내용={desc_preview}")
+            
+            # 원본 Docling 문서 객체 확인 (있는 경우)
+            if hasattr(parsed_document, 'docling_document') and parsed_document.docling_document:
+                logger.info("[CHUNKS] Docling 내부 문서 객체 있음")
+                doc = parsed_document.docling_document
+                
+                # 레이아웃 정보 확인
+                if hasattr(doc, 'layout') and doc.layout:
+                    logger.info(f"  - 레이아웃 정보 있음: {type(doc.layout).__name__}")
+                    # 레이아웃 항목 수
+                    if hasattr(doc.layout, 'items'):
+                        logger.info(f"  - 레이아웃 항목 수: {len(doc.layout.items) if isinstance(doc.layout.items, list) else 'N/A'}")
+            else:
+                logger.info("[CHUNKS] Docling 내부 문서 객체 없음")
+            
+            logger.info("----- 청킹 단계 입력 데이터 확인 종료 -----\n")
+        
+        except Exception as e:
+            logger.error(f"청킹 데이터 디버깅 오류: {e}")
+
+    # 단순 청킹 메서드 (폴백) - 라인 단위로 나누기
+    def _simple_text_chunking(self, text: str) -> List[DocumentChunk]:
+        """
+        텍스트를 단순 텍스트 분할 방식으로 청킹합니다. (폴백 메서드)
+        한 라인이 chunk_size를 초과하면 여러 청크로 나눕니다.
+        빈 라인은 개별 청크로 취급하지 않습니다.
+        """
+        # 청킹 시작 로깅
+        logger.info(f"[CHUNKING] 시작: 입력 텍스트 길이 {len(text)} 문자")
+
+        chunks: List[DocumentChunk] = []
+        lines = text.split('\n')
+        
+        # 각 라인 처리
+        current_chunk_lines = []
+        current_length = 0
+        
+        for line in lines:
+            line_length = len(line)
+            
+            # 현재 라인이 청크 크기를 초과하면 여러 청크로 분할
+            if line_length > self._chunk_size:
+                # 기존에 모인 내용이 있으면 청크로 만들기
+                if current_chunk_lines and current_length > 0:
+                    chunk_text = '\n'.join(current_chunk_lines)
+                    chunks.append(DocumentChunk(content=chunk_text, metadata={}))
+                    current_chunk_lines = []
+                    current_length = 0
+                
+                # 긴 라인 분할
+                words = line.split(' ')
+                temp_chunk = ""
+                
+                for word in words:
+                    if len(temp_chunk) + len(word) + 1 <= self._chunk_size:
+                        if temp_chunk:
+                            temp_chunk += ' ' + word
+                        else:
+                            temp_chunk = word
+                    else:
+                        if temp_chunk:
+                            chunks.append(DocumentChunk(content=temp_chunk, metadata={}))
+                        temp_chunk = word
+                
+                # 마지막 temp_chunk 추가
+                if temp_chunk:
+                    chunks.append(DocumentChunk(content=temp_chunk, metadata={}))
+            
+            # 현재 라인 추가시 청크 크기 초과하는 경우
+            elif current_length + line_length + 1 > self._chunk_size:
+                # 기존 내용으로 청크 생성
+                chunk_text = '\n'.join(current_chunk_lines)
+                chunks.append(DocumentChunk(content=chunk_text, metadata={}))
+                
+                # 새 청크 시작
+                current_chunk_lines = [line]
+                current_length = line_length
+            
+            # 현재 청크에 라인 추가
+            else:
+                current_chunk_lines.append(line)
+                current_length += line_length + 1  # +1 for newline
+        
+        # 마지막 청크 처리
+        if current_chunk_lines:
+            chunk_text = '\n'.join(current_chunk_lines)
+            chunks.append(DocumentChunk(content=chunk_text, metadata={}))
+        
+        # 청크 생성 결과 출력 (일부만)
+        logger.info(f"[CHUNKING] 성공: {len(chunks)}개 청크 생성됨")
+        # 미리보기 (첫 3개 청크)
+        chunk_count = len(chunks)
+        display_limit = min(3, chunk_count)
+        for i in range(display_limit):
+            chunk = chunks[i]
+            logger.info(f"  청크 {i+1}: {len(chunk.content)} 문자")
+            
+            # 이미지 설명 정보 출력 (있는 경우)
+            if 'image_description' in chunk.metadata and chunk.metadata['image_description']:
+                desc_preview = str(chunk.metadata['image_description'])[:100]
+                if len(str(chunk.metadata['image_description'])) > 100:
+                    desc_preview += "..."
+                logger.info(f"  이미지 설명: {desc_preview}")
+
+        # 나머지 청크 수만 출력
+        if chunk_count > display_limit:
+            logger.info(f"  ... 외 {chunk_count-display_limit}개 청크")
         
         return chunks

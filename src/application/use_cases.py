@@ -78,8 +78,27 @@ class IngestDocumentUseCase(DocumentProcessingInputPort):
         logger.error(f"[USECASE] 시작: {raw_document.metadata.get('filename', 'unknown')}")
         
         try:
+            # None 검사 추가
+            if raw_document is None:
+                logger.error("IngestDocumentUseCase: raw_document is None")
+                return []
+            
+            if not hasattr(raw_document, 'content') or raw_document.content is None:
+                logger.error("IngestDocumentUseCase: raw_document.content is None or missing")
+                return []
+            
             # 1. 파싱 (파싱 포트 호출)
             parsed_document = self._parser_port.parse(raw_document)
+            
+            # None 검사 추가
+            if parsed_document is None:
+                logger.error("IngestDocumentUseCase: parsed_document is None")
+                return []
+            
+            if not hasattr(parsed_document, 'content') or parsed_document.content is None:
+                logger.error("IngestDocumentUseCase: parsed_document.content is None or missing")
+                return []
+            
             logger.error(f"[USECASE] 파싱 완료: 길이 {len(parsed_document.content)}")
 
             # 2. 청킹 (청킹 포트 호출)

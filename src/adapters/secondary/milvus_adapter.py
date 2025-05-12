@@ -3,6 +3,15 @@
 # --- Milvus 클라이언트 라이브러리 임포트 ---
 # 실제 사용하는 pymilvus 버전에 따라 임포트 구문이나 클래스/메서드 이름이 다를 수 있습니다.
 # 제공된 코드 스니펫에 있던 임포트들을 최대한 반영합니다.
+import logging
+from typing import List, Dict, Any, Optional, Tuple, Union, Callable, Iterable, Set
+import time
+import os
+import json
+
+# 로거 임포트
+from src.config import logger
+
 try:
     # 성공 스크립트의 임포트 방식을 따릅니다.
     from pymilvus import ( # <-- pymilvus 최상위 패키지에서 임포트 시도
@@ -20,17 +29,19 @@ try:
     from pymilvus.model.hybrid import BGEM3EmbeddingFunction # <-- BGEM3EmbeddingFunction 임포트 추가
 
     _milvus_library_available = True
-    print("pymilvus library imported successfully.")
+    logger.info("pymilvus library imported successfully.")
 except ImportError:
-    print("Warning: pymilvus library not found. MilvusAdapter will not be functional.")
+    # pymilvus 라이브러리를 설치하지 않았거나 임포트할 수 없는 경우
+    # 더미 클래스와 플래그를 정의합니다.
     _milvus_library_available = False
+    logger.warning("Warning: pymilvus library not found. MilvusAdapter will not be functional.")
     # --- pymilvus가 없을 경우 더미 클래스 정의 (에러 방지 및 시뮬레이션) ---
     # 제공된 코드 스니펫의 클래스들을 더미로 정의합니다.
-    print("   Using dummy Milvus classes.")
+    logger.info("   Using dummy Milvus classes.")
     class MilvusClient:
         # 제공된 코드 기반 생성자 시그니처 반영
         def __init__(self, uri=None, host=None, port=None, token=None, user=None, password=None, **kwargs):
-             print(f"   (Simulating MilvusClient initialization - Library not available) uri={uri}, host={host}, port={port}, user={user}")
+             logger.info(f"   (Simulating MilvusClient initialization - Library not available) uri={uri}, host={host}, port={port}, user={user}")
              self._is_connected = True # 시뮬레이션을 위해 항상 연결된 것으로 가정
              self.uri = uri # URI 저장
              self.host = host # host 저장
@@ -42,40 +53,40 @@ except ImportError:
         def is_connected(self): return self._is_connected
         # insert 메서드 시뮬레이션 (제공된 코드는 insert를 사용)
         def insert(self, collection_name, data, **kwargs):
-             print(f"   (Simulating MilvusClient.insert to '{collection_name}' - Library not available)")
+             logger.info(f"   (Simulating MilvusClient.insert to '{collection_name}' - Library not available)")
              if not data: return None
              import random
              if random.random() > 0.9: raise Exception("Simulated Milvus insert failure") # 시뮬레이션 실패
              num_entities = len(data)
-             print(f"   (Simulating successful insert of {num_entities} entities)")
+             logger.info(f"   (Simulating successful insert of {num_entities} entities)")
              # insert 결과 시뮬레이션 (UUID 대신 더미 ID 반환)
              sim_ids = [uuid.uuid4().int for _ in range(num_entities)] # INT64 ID 시뮬레이션
              return sim_ids
 
         # upsert 메서드 시뮬레이션 (우리가 원래 사용하려던 것)
         def upsert(self, collection_name, data, **kwargs):
-             print(f"   (Simulating MilvusClient.upsert to '{collection_name}' - Library not available)")
+             logger.info(f"   (Simulating MilvusClient.upsert to '{collection_name}' - Library not available)")
              if not data: return None
              import random
              if random.random() > 0.9: raise Exception("Simulated Milvus upsert failure")
              num_entities = len(data)
-             print(f"   (Simulating successful upsert of {num_entities} entities)")
+             logger.info(f"   (Simulating successful upsert of {num_entities} entities)")
              return {"insert_count": num_entities, "delete_count": 0, "upsert_count": num_entities} # upsert 결과 시뮬레이션
 
         # search 메서드 시뮬레이션
         def search(self, collection_name, data, **kwargs):
-             print(f"   (Simulating MilvusClient.search in '{collection_name}' - Library not available)")
+             logger.info(f"   (Simulating MilvusClient.search in '{collection_name}' - Library not available)")
              return [] # 빈 검색 결과 시뮬레이션
 
         # describe_collection 시뮬레이션
         def describe_collection(self, collection_name, **kwargs):
-             print(f"   (Simulating MilvusClient.describe_collection('{collection_name}'))")
+             logger.info(f"   (Simulating MilvusClient.describe_collection('{collection_name}'))")
              # 더미 컬렉션 정보 반환 (제공된 코드 기반)
              return {'collection_name': collection_name, 'collection_id': 12345, 'auto_id': True, 'description': 'Dummy Collection', 'properties': {'collection.metadata': {'embedding_model': {'name': 'dummy-model', 'dimension': 768}}}}
 
         @staticmethod # 스태틱 메서드 시뮬레이션
         def create_schema(auto_id=True, enable_dynamic_field=False, description="", **kwargs):
-             print("   (Simulating MilvusClient.create_schema)")
+             logger.info("   (Simulating MilvusClient.create_schema)")
              class MockSchema:
                  def __init__(self, auto_id, enable_dynamic_field, description):
                       self.auto_id = auto_id
@@ -83,7 +94,7 @@ except ImportError:
                       self.description = description
                       self.fields = []
                  def add_field(self, field_name, datatype, is_primary=False, auto_id=False, dim=None):
-                      print(f"      (Simulating schema.add_field: {field_name})")
+                      logger.info(f"      (Simulating schema.add_field: {field_name})")
                       self.fields.append({'name': field_name, 'datatype': str(datatype), 'is_primary': is_primary, 'auto_id': auto_id, 'dim': dim})
              # 더미 DataType 사용
              class MockDataType: INT64="INT64"; FLOAT_VECTOR="FLOAT_VECTOR"; JSON="JSON"; VARCHAR="VARCHAR"
@@ -91,24 +102,24 @@ except ImportError:
 
 
     class Collection: # 더미 Collection 클래스
-        def __init__(self, name, **kwargs): print(f"   (Simulating Collection('{name}'))")
-        def insert(self, data, **kwargs): print("   (Simulating Collection.insert)"); return [] # 더미 결과
-        def upsert(self, data, **kwargs): print("   (Simulating Collection.upsert)"); return {"insert_count": 0} # 더미 결과
-        def search(self, data, **kwargs): print("   (Simulating Collection.search)"); return [] # 더미 결과
-        def load(self): print("   (Simulating Collection.load)")
-        def release(self): print("   (Simulating Collection.release)")
-        def create_index(self, field_name, index_params, **kwargs): print(f"   (Simulating Collection.create_index on {field_name})")
-        def set_properties(self, properties): print(f"   (Simulating Collection.set_properties)")
+        def __init__(self, name, **kwargs): logger.info(f"   (Simulating Collection('{name}'))")
+        def insert(self, data, **kwargs): logger.info("   (Simulating Collection.insert)"); return [] # 더미 결과
+        def upsert(self, data, **kwargs): logger.info("   (Simulating Collection.upsert)"); return {"insert_count": 0} # 더미 결과
+        def search(self, data, **kwargs): logger.info("   (Simulating Collection.search)"); return [] # 더미 결과
+        def load(self): logger.info("   (Simulating Collection.load)")
+        def release(self): logger.info("   (Simulating Collection.release)")
+        def create_index(self, field_name, index_params, **kwargs): logger.info(f"   (Simulating Collection.create_index on {field_name})")
+        def set_properties(self, properties): logger.info(f"   (Simulating Collection.set_properties)")
         def describe(self): return {'name': self.name} # 더미 describe
 
     class connections: # 더미 connections 클래스
-        def connect(self, host, port, token, **kwargs): print(f"   (Simulating connections.connect to {host}:{port})")
-        def disconnect(self, alias="default"): print("   (Simulating connections.disconnect)")
-        def list_connections(self): print("   (Simulating connections.list_connections)"); return ["default"]
+        def connect(self, host, port, token, **kwargs): logger.info(f"   (Simulating connections.connect to {host}:{port})")
+        def disconnect(self, alias="default"): logger.info("   (Simulating connections.disconnect)")
+        def list_connections(self): logger.info("   (Simulating connections.list_connections)"); return ["default"]
 
     class utility: # 더미 utility 클래스
-        def has_collection(self, collection_name, **kwargs): print(f"   (Simulating utility.has_collection('{collection_name}'))"); return True # 항상 있다고 시뮬레이션
-        def drop_collection(self, collection_name, **kwargs): print(f"   (Simulating utility.drop_collection('{collection_name}'))")
+        def has_collection(self, collection_name, **kwargs): logger.info(f"   (Simulating utility.has_collection('{collection_name}'))"); return True # 항상 있다고 시뮬레이션
+        def drop_collection(self, collection_name, **kwargs): logger.info(f"   (Simulating utility.drop_collection('{collection_name}'))")
 
     class FieldSchema: pass # 더미
     class CollectionSchema: pass # 더미
@@ -140,7 +151,7 @@ class MilvusAdapter(VectorDatabasePort):
     문서 청크와 임베딩 벡터를 Milvus 컬렉션에 저장합니다.
     """
     def __init__(self, host=None, port=None, collection_name="test_250430_1024_hybrid", token=None, uri=None):
-        print("MilvusAdapter: 수정된 방식으로 초기화 시작...")
+        logger.info("MilvusAdapter: 수정된 방식으로 초기화 시작...")
         
         self._collection_name = collection_name
         self._is_initialized_successfully = False
@@ -150,7 +161,7 @@ class MilvusAdapter(VectorDatabasePort):
             
             # 명시적 URI 문자열 생성 - 앞에 tcp:// 스키마 사용
             milvus_uri = f"tcp://10.10.30.80:30953"
-            print(f"Milvus URI: {milvus_uri}")
+            logger.info(f"Milvus URI: {milvus_uri}")
             
             # MilvusClient 생성 시 uri를 첫 번째 위치 인수로 전달
             self._client = MilvusClient(
@@ -159,15 +170,15 @@ class MilvusAdapter(VectorDatabasePort):
                 password="smr0701!",
                 secure=False     # SSL 비활성화
             )
-            print("MilvusClient 인스턴스 생성 시도")
+            logger.info("MilvusClient 인스턴스 생성 시도")
             
             # 연결 상태 확인
             self._is_initialized_successfully = True
-            print("MilvusAdapter 초기화 완료")
+            logger.info("MilvusAdapter 초기화 완료")
             
             
         except Exception as e:
-            print(f"Milvus 초기화 오류: {e}")
+            logger.error(f"Milvus 초기화 오류: {e}")
             self._client = None
             self._is_initialized_successfully = False
             raise Exception(f"Milvus 연결 실패: {e}")
@@ -178,25 +189,25 @@ class MilvusAdapter(VectorDatabasePort):
         """
         문서 청크 목록과 해당하는 임베딩 벡터 목록을 Milvus 컬렉션에 저장합니다.
         """
-        print(f"[STORAGE] 시작: {len(chunks)}개 청크와 {len(embeddings)}개 임베딩 저장 시도")
+        logger.info(f"[STORAGE] 시작: {len(chunks)}개 청크와 {len(embeddings)}개 임베딩 저장 시도")
 
         # 어댑터가 유효하고 초기화 성공했는지 확인
         if not self._is_initialized_successfully or self._client is None:
              # self._client.is_connected()는 매번 호출하기보다 초기화 상태와 클라이언트 존재 여부로 판단
             error_msg = "MilvusAdapter: Adapter not successfully initialized. Cannot save data."
-            print(error_msg)
+            logger.error(error_msg)
             raise MilvusAdapterError(error_msg)
 
 
         # 청크와 임베딩 개수 일치 확인
         if len(chunks) != len(embeddings):
             error_msg = f"MilvusAdapter: Mismatch between number of chunks ({len(chunks)}) and embeddings ({len(embeddings)}). Must be 1:1."
-            print(error_msg)
+            logger.error(error_msg)
             raise MilvusAdapterError(error_msg)
 
         # 저장할 데이터가 없는 경우 처리
         if not chunks:
-            print("MilvusAdapter: No data to save. Skipping Milvus operation.")
+            logger.info("MilvusAdapter: No data to save. Skipping Milvus operation.")
             return # 저장할 데이터가 없으면 바로 반환
 
         # --- 데이터 준비: DocumentChunk/EmbeddingVector -> Milvus 삽입 형식 ---
@@ -210,7 +221,7 @@ class MilvusAdapter(VectorDatabasePort):
 
         entities_to_insert = []
         try:
-            print(f"   Preparing {len(chunks)} entities for Milvus insertion based on script schema...")
+            logger.info(f"   Preparing {len(chunks)} entities for Milvus insertion based on script schema...")
             for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
                 # 각 엔티티에 필요한 필드 준비 (스키마 필드명 사용)
 
@@ -257,11 +268,11 @@ class MilvusAdapter(VectorDatabasePort):
                 }
                 entities_to_insert.append(entity)
 
-            print(f"[STORAGE] 준비된 엔티티: {len(entities_to_insert)}개")
+            logger.info(f"[STORAGE] 준비된 엔티티: {len(entities_to_insert)}개")
 
         except Exception as e:
             error_msg = f"MilvusAdapter: Error preparing data for Milvus: {e}"
-            print(error_msg)
+            logger.error(error_msg)
             # 데이터 준비 중 오류 발생 시 MilvusAdapterError 예외 발생
             raise MilvusAdapterError(error_msg) from e
 
@@ -272,7 +283,7 @@ class MilvusAdapter(VectorDatabasePort):
 
         try:
             # Milvus insert 호출 전
-            print(f"[STORAGE] Milvus insert 호출...")
+            logger.info(f"[STORAGE] Milvus insert 호출...")
             
             # insert 호출
             mutation_result = self._client.insert(
@@ -281,20 +292,20 @@ class MilvusAdapter(VectorDatabasePort):
             )
             
             # 성공 여부 로깅
-            print(f"[STORAGE] 성공: Milvus 응답 = {mutation_result}")
+            logger.info(f"[STORAGE] 성공: Milvus 응답 = {mutation_result}")
 
         except MilvusException as e: # Milvus 라이브러리 특정 예외 처리 (pymilvus.exceptions.MilvusException 등)
             error_msg = f"MilvusAdapter: Milvus operation error during insert: {e}"
-            print(error_msg)
+            logger.error(error_msg)
             # Milvus 관련 오류 발생 시 어댑터 특정 예외를 발생시켜 유스케이스로 전달
             raise MilvusAdapterError(error_msg) from e
         except Exception as e: # 그 외 insert 호출 중 발생할 수 있는 예외 처리
             error_msg = f"MilvusAdapter: An unexpected error occurred during Milvus insert: {e}"
-            print(error_msg)
+            logger.error(error_msg)
             # 예상치 못한 오류 발생 시 MilvusAdapterError 예외 발생
             raise MilvusAdapterError(error_msg) from e
 
-        print(f"MilvusAdapter: Save operation finished for {len(entities_to_insert)} entities.")
+        logger.info(f"MilvusAdapter: Save operation finished for {len(entities_to_insert)} entities.")
 
     # --- 검색 기능 메서드 (RAG 검색 단계 필요시 구현) ---
     # VectorDatabasePort에 search_similar_vectors 메서드가 있다면 여기서 구현합니다.
