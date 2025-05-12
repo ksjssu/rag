@@ -332,8 +332,8 @@ class DoclingChunkerAdapter(TextChunkingPort):
             if i < chunk_count:  # 안전 검사
                 chunk = chunks[i]
                 logger.info(f"  청크 {i+1}: {len(chunk.content)} 문자")
-                # 청크가 이미지 소스인 경우 설명 추가 출력
-                if chunk.metadata.get("source") == "image" and "image_description" in chunk.metadata:
+            # 청크가 이미지 소스인 경우 설명 추가 출력
+            if chunk.metadata.get("source") == "image" and "image_description" in chunk.metadata:
                     img_desc = chunk.metadata.get('image_description', '')
                     desc_preview = ""
                     if isinstance(img_desc, str):
