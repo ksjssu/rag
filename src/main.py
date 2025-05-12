@@ -107,16 +107,39 @@ def create_app() -> FastAPI:
     ocr_options.force_full_page_ocr = True
 
     # 간소화된 PDF 파이프라인 옵션
-    pdf_options = PdfPipelineOptions(
-        do_ocr=True,  # OCR 활성화
-        ocr_options=ocr_options,  # OCR 옵션 설정
-        generate_page_images=True  # OCR을 위한 이미지 생성
-    )
+    try:
+        # 새로운 Docling API 방식으로 시도
+        from docling.datamodel.pipeline_options import granite_picture_description
+        
+        pdf_options = PdfPipelineOptions(
+            do_ocr=True,  # OCR 활성화
+            ocr_options=ocr_options,  # OCR 옵션 설정
+            generate_page_images=True,  # OCR을 위한 이미지 생성
+            do_picture_description=True,  # 이미지 설명 활성화
+            images_scale=2.0,  # 이미지 크기 조정
+            generate_picture_images=True  # 이미지 생성 활성화
+        )
+        
+        # 이미지 설명 옵션 (최신 API)
+        try:
+            pdf_options.picture_description_options = granite_picture_description
+            # 직접 문자열 할당 대신 속성 설정 방식 사용
+            pdf_options.picture_description_options.prompt = "Describe the image in three sentences. Be consise and accurate."
+        except Exception as e:
+            logger.warning(f"Failed to set picture_description_options: {e}")
+    
+    except (ImportError, AttributeError):
+        # 이전 API 버전 사용
+        pdf_options = PdfPipelineOptions(
+            do_ocr=True,
+            ocr_options=ocr_options,
+            generate_page_images=True
+        )
 
     # 파서 어댑터 생성
     parser_adapter = DoclingParserAdapter(
-        allowed_formats=DOCLING_ALLOWED_FORMATS
-       # pdf_options=pdf_options
+        allowed_formats=DOCLING_ALLOWED_FORMATS,
+        pdf_options=pdf_options
     )
     logger.info("- Created DoclingParserAdapter instance.")
 

@@ -36,7 +36,7 @@ try:
 
     # --- 파이프라인 옵션 임포트 ---
     # from docling_core.datamodel.pipeline_options import PipelineOptions, PdfPipelineOptions # 이전 시도 (실패)
-    from docling.datamodel.pipeline_options import PipelineOptions, PdfPipelineOptions, EasyOcrOptions, TableStructureOptions, AcceleratorOptions, TableFormerMode # <-- 정확한 경로: docling/datamodel/pipeline_options.py
+    from docling.datamodel.pipeline_options import PipelineOptions, PdfPipelineOptions, EasyOcrOptions, TableStructureOptions, AcceleratorOptions, TableFormerMode, granite_picture_description # <-- 정확한 경로: docling/datamodel/pipeline_options.py
 
     # 필요한 다른 Docling 모듈/클래스 임포트 (예외 클래스 등)
     # from docling_core.exceptions import ConversionError as DoclingConversionError # 이전 시도 (실패)
@@ -472,18 +472,40 @@ class DoclingParserAdapter(DocumentParsingPort):
             if result.status == ConversionStatus.SUCCESS:
                 doc = result.document
                 
+                print("doc type:", type(doc))
+                print("doc dir:", dir(doc))
+                try:
+                    print("doc.pictures type:", type(doc.pictures))
+                    print("doc.pictures:", doc.pictures)
+                except Exception as e:
+                    print("doc.pictures 접근 오류:", e)
+                
                 # 1. 기본 텍스트 추출
                 backend_text = ""
                 ocr_text = ""
                 try:
                     if hasattr(doc, 'export_to_text'):
-                        backend_text = doc.export_to_text()
+                        # 호출 가능한지 확인 후 호출
+                        if callable(doc.export_to_text):
+                            backend_text = doc.export_to_text()
+                        else:
+                            # 문자열이나 다른 타입이면 문자열로 변환
+                            backend_text = str(doc.export_to_text)
+                    
                     if hasattr(doc, 'ocr_text'):
-                        ocr_text = doc.ocr_text
+                        ocr_text = str(doc.ocr_text) if doc.ocr_text is not None else ""
                     elif hasattr(doc, 'export_to_markdown'):
-                        ocr_text = doc.export_to_markdown()
+                        # 호출 가능한지 확인 후 호출
+                        if callable(doc.export_to_markdown):
+                            ocr_text = doc.export_to_markdown()
+                        else:
+                            # 문자열이나 다른 타입이면 문자열로 변환
+                            ocr_text = str(doc.export_to_markdown)
                 except Exception as e:
                     logger.error(f"Text extraction error: {e}")
+                    # 오류의 상세 내용 로깅
+                    import traceback
+                    logger.error(f"텍스트 추출 오류 상세: {traceback.format_exc()}")
                 
                 # 2. 테이블 정보 추출
                 tables = []
@@ -582,9 +604,11 @@ class DoclingParserAdapter(DocumentParsingPort):
                 image_descriptions = []
                 try:
                     if hasattr(doc, 'images'):
-                        logger.info(f"doc.images: {doc.images}")
+                        print("doc.pictures type:", type(doc.pictures))
+                        print("doc.pictures:", doc.pictures)
+                        logger.info(f"doc.images: {doc.pictures}")
                         logger.info(f"doc 객체 타입: {type(doc)}")
-                        for image in doc.images:
+                        for image in doc.pictures:
                             images.append({
                                 'data': image.data,
                                 'description': image.description,
@@ -1183,7 +1207,6 @@ pdf_options = PdfPipelineOptions(
 
     # 4. 이미지 처리 설정
     do_picture_classification=True,
-    do_picture_description=True,
     generate_page_images=True,
     generate_picture_images=True,
     images_scale=1.5,
@@ -1203,8 +1226,16 @@ pdf_options = PdfPipelineOptions(
     accelerator_options=AcceleratorOptions(
         device="cpu",  # 또는 "cuda"
         num_threads=4
-    )
+    ),
+
+    # 9. 이미지 설명 설정
+    do_picture_description=True,
+    picture_description_options=granite_picture_description,
+    picture_description_options_prompt="Describe the image in three sentences. Be consise and accurate."
 )
+
+print(type(pdf_options.picture_description_options))
+print(pdf_options.picture_description_options)
 
 # 파서 어댑터 생성 시 PDF 옵션 전달
 parser_adapter = DoclingParserAdapter(
