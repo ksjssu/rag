@@ -9,21 +9,17 @@ import uvicorn
 import os
 import logging
 from typing import Optional, List
-import tempfile
 from pathlib import Path
 import sys
+import traceback
 
 # Add the src directory to the Python path
-import sys
-from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from docling.datamodel.pipeline_options import (
     PdfPipelineOptions,
     EasyOcrOptions,
-    TableStructureOptions,
-    AcceleratorOptions,
-    TableFormerMode
+    granite_picture_description
 )
 
 # Configure logging
@@ -47,37 +43,43 @@ from src.adapters.secondary.env_apikey_adapter import EnvApiKeyAdapter
 from src.adapters.secondary.milvus_adapter import MilvusAdapter
 
 # --- 애플리케이션 설정 로드 ---
-# 실제 애플리케이션에서는 환경 변수, 설정 파일 등에서 로드합니다.
-# 여기서는 환경 변수에서 로드하거나 기본값을 사용하는 예시를 보여줍니다.
-# from config import load_config # 예시: 별도 설정 로딩 함수
-# app_config = load_config() # 예시
+# 환경 변수에서 설정을 로드하거나 기본값을 사용합니다.
+MILVUS_HOST: str = os.getenv("MILVUS_HOST", "localhost")
+MILVUS_PORT: int = int(os.getenv("MILVUS_PORT", 19530))
+MILVUS_COLLECTION: str = os.getenv("MILVUS_COLLECTION", "document_collection")
+MILVUS_USER: Optional[str] = os.getenv("MILVUS_USER", "")
+MILVUS_PASSWORD: Optional[str] = os.getenv("MILVUS_PASSWORD", "")
 
-# Milvus 연결 설정 (예시 값 - 실제 환경에 맞게 수정 필요)
-# 환경 변수에서 값을 읽어옵니다. 환경 변수가 설정되지 않았다면 기본값을 사용합니다.
-MILVUS_HOST: str = os.getenv("MILVUS_HOST", "10.10.30.80")
-MILVUS_PORT: int = int(os.getenv("MILVUS_PORT", 30953))
-MILVUS_COLLECTION: str = os.getenv("MILVUS_COLLECTION", "test_250430_1024_hybrid")
-MILVUS_USER: Optional[str] = os.getenv("MILVUS_USER", "root") # 환경 변수 없으면 None
-MILVUS_PASSWORD: Optional[str] = os.getenv("MILVUS_PASSWORD", "smr0701!") # 환경 변수 없으면 None
-
-# Docling 설정 (예시)
-DOCLING_ALLOWED_FORMATS: List[str] = os.getenv("DOCLING_ALLOWED_FORMATS", "pdf,docx,xlsx,pptx,jpg,png").split(',') # 쉼표로 구분된 문자열을 리스트로 변환
-# DOCLING_API_KEY = os.getenv("DOCLING_API_KEY") # EnvApiKeyAdapter가 처리 가능
-
-# 추가: 한글 인식을 위한 OCR 설정
+# Docling 설정
+DOCLING_ALLOWED_FORMATS: List[str] = os.getenv("DOCLING_ALLOWED_FORMATS", "pdf,docx,xlsx,pptx,jpg,png").split(',')
 DOCLING_OCR_LANGUAGES: List[str] = os.getenv("DOCLING_OCR_LANGUAGES", "kor,eng").split(',')
 
-# 청킹 설정 (심플 청킹 또는 Docling HybridChunker에 전달될 설정)
+# 청킹 설정
 DEFAULT_CHUNK_SIZE: int = int(os.getenv("DEFAULT_CHUNK_SIZE", 1000))
 DEFAULT_CHUNK_OVERLAP: int = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))
-# HybridChunker 특정 설정도 여기에 포함될 수 있습니다.
-# HYBRID_CHUNKER_STRATEGIES: List[str] = os.getenv("HYBRID_CHUNKER_STRATEGIES", "recursive,by_title").split(',')
 
-
-# 임베딩 모델 설정 (예시)
+# 임베딩 모델 설정
 EMBEDDING_MODEL_NAME: str = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
 EMBEDDING_DEVICE: str = os.getenv("EMBEDDING_DEVICE", "cpu")
-# EMBEDDING_API_KEY = os.getenv("EMBEDDING_API_KEY") # EnvApiKeyAdapter가 처리 가능
+
+# 더미 Milvus 어댑터 클래스 정의 (실제 Milvus를 사용할 수 없을 때 대체용)
+class DummyMilvusAdapter:
+    """Milvus 연결 실패 시 사용하는 더미 어댑터"""
+    
+    def __init__(self, *args, **kwargs):
+        logger.warning("Using DummyMilvusAdapter - Data will not be persisted")
+        
+    async def store_document(self, *args, **kwargs):
+        logger.warning("DummyMilvusAdapter: store_document called, but no action taken")
+        return {"status": "dummy", "message": "Data not stored (using dummy adapter)"}
+
+    async def search_documents(self, *args, **kwargs):
+        logger.warning("DummyMilvusAdapter: search_documents called, but no action taken")
+        return []
+
+    async def get_document(self, *args, **kwargs):
+        logger.warning("DummyMilvusAdapter: get_document called, but no action taken")
+        return None
 
 
 def create_app() -> FastAPI:
@@ -88,115 +90,114 @@ def create_app() -> FastAPI:
     """
     logger.info("--- Starting Application Assembly ---")
 
-    # --- 1. 세컨더리 어댑터 인스턴스 생성 ---
-    # 애플리케이션 코어(유스케이스)가 필요로 하는 외부 기능을 제공하는 어댑터들(출력 포트 구현체)을 생성하고 설정합니다.
-    # 어댑터가 다른 어댑터나 외부 설정에 의존한다면 여기서 해당 의존성을 주입합니다.
-
-    # API 키 관리 어댑터 (다른 어댑터들이 의존할 수 있음)
+    # API 키 관리 어댑터
     apikey_adapter = EnvApiKeyAdapter()
     logger.info("- Created EnvApiKeyAdapter instance.")
 
-    # 기본 EasyOcrOptions 인스턴스 생성 (기본값 사용)
+    # OCR 옵션 설정
     ocr_options = EasyOcrOptions(
         lang=["ko", "en"],  # 한국어와 영어 지원
-        confidence_threshold=0.3,  # 낮은 신뢰도도 허용
-        download_enabled=True  # 필요한 모델 자동 다운로드
+        confidence_threshold=0.3,
+        download_enabled=True
     )
-
-    # OcrOptions의 force_full_page_ocr 필드 설정 (별도로 설정)
     ocr_options.force_full_page_ocr = True
 
-    # 간소화된 PDF 파이프라인 옵션
-    try:
-        # 새로운 Docling API 방식으로 시도
-        from docling.datamodel.pipeline_options import granite_picture_description
-        
-        pdf_options = PdfPipelineOptions(
-            do_ocr=True,  # OCR 활성화
-            ocr_options=ocr_options,  # OCR 옵션 설정
-            generate_page_images=True,  # OCR을 위한 이미지 생성
-            do_picture_description=True,  # 이미지 설명 활성화
-            images_scale=2.0,  # 이미지 크기 조정
-            generate_picture_images=True  # 이미지 생성 활성화
-        )
-        
-        # 이미지 설명 옵션 (최신 API)
-        try:
-            pdf_options.picture_description_options = granite_picture_description
-            # 직접 문자열 할당 대신 속성 설정 방식 사용
-            pdf_options.picture_description_options.prompt = "Describe the image in three sentences. Be consise and accurate."
-        except Exception as e:
-            logger.warning(f"Failed to set picture_description_options: {e}")
+    # 기본 파이프라인 옵션 설정
+    pdf_options = PdfPipelineOptions(
+        do_ocr=True,  # OCR 활성화
+        ocr_options=ocr_options,  # OCR 옵션 설정
+        generate_page_images=True,  # OCR을 위한 이미지 생성
+        do_picture_description=True,  # 이미지 설명 활성화
+        picture_description_options=granite_picture_description,  # 기본 내장 모델 사용
+        images_scale=2.0,  # 이미지 크기 조정
+        generate_picture_images=True  # 이미지 생성 활성화
+    )
     
-    except (ImportError, AttributeError):
-        # 이전 API 버전 사용
-        pdf_options = PdfPipelineOptions(
-            do_ocr=True,
-            ocr_options=ocr_options,
-            generate_page_images=True
-        )
+    # 파이프라인 옵션 로깅
+    logger.info(f"Type of pdf_options.picture_description_options: {type(pdf_options.picture_description_options)}")
+    logger.info(f"Value of pdf_options.picture_description_options: {pdf_options.picture_description_options!r}")
 
+    # granite_picture_description이 객체이고 prompt 속성을 가지고 있는지 확인
+    if hasattr(pdf_options.picture_description_options, 'prompt'):
+        logger.info(f"Prompt on pdf_options.picture_description_options: {pdf_options.picture_description_options.prompt!r}")
+    else:
+        logger.info("pdf_options.picture_description_options does not have a 'prompt' attribute directly, or it might have been overwritten.")
+            
+    # 이미지 설명 옵션 활성화
+    logger.info("이미지 설명 기능이 활성화되었습니다.")
+    
     # 파서 어댑터 생성
-    parser_adapter = DoclingParserAdapter(
-        allowed_formats=DOCLING_ALLOWED_FORMATS,
-        pdf_options=pdf_options
-    )
-    logger.info("- Created DoclingParserAdapter instance.")
-
-    # 청킹 어댑터 (Docling HybridChunker 구현체 또는 폴백 - TextChunkingPort)
-    # __init__에 청킹 설정 전달 (DoclingChunkerAdapter 상세 구현에서 확인)
-    chunker_adapter = DoclingChunkerAdapter(chunk_size=DEFAULT_CHUNK_SIZE, chunk_overlap=DEFAULT_CHUNK_OVERLAP)
-    # HybridChunker 특정 설정 전달 예시:
-    # chunker_adapter = DoclingChunkerAdapter(chunk_size=DEFAULT_CHUNK_SIZE, chunk_overlap=DEFAULT_CHUNK_OVERLAP, splitting_strategies=HYBRID_CHUNKER_STRATEGIES)
-    logger.info("- Created DoclingChunkerAdapter instance.")
-
-    # 임베딩 어댑터 (BGE-M3 구현체 - EmbeddingGenerationPort)
-    # __init__에 모델 설정 및 API 키 어댑터 주입 (BgeM3EmbedderAdapter 상세 구현에서 확인)
-    # MilvusAdapter는 EmbeddingVector를 사용하므로, 임베딩 어댑터가 MilvusAdapter보다 먼저 생성되어야 합니다.
-    embedder_adapter = BgeM3EmbedderAdapter(
-        model_name=EMBEDDING_MODEL_NAME,
-        device=EMBEDDING_DEVICE,
-        #api_key_port=apikey_adapter # 임베딩 어댑터가 API 키가 필요하다면 주입
-    )
-    logger.info("- Created BgeM3EmbedderAdapter instance.")
-
-    # 데이터 저장소 어댑터 (Milvus 구현체 - VectorDatabasePort)
-    # __init__에 Milvus 접속 정보 주입 및 연결 시도 (MilvusAdapter 상세 구현에서 확인)
-    persistence_adapter = None # 기본값 None
     try:
+        parser_adapter = DoclingParserAdapter(
+            allowed_formats=DOCLING_ALLOWED_FORMATS,
+            use_gpt_picture_description=False  # OpenAI 모델 사용하지 않음
+        )
+        logger.info("- Created DoclingParserAdapter instance.")
+    except Exception as e:
+        logger.error(f"Failed to initialize DoclingParserAdapter: {e}")
+        traceback.print_exc()
+        raise RuntimeError(f"Application startup failed: {e}")
+
+    # 청킹 어댑터 생성
+    try:
+        chunker_adapter = DoclingChunkerAdapter(
+            chunk_size=DEFAULT_CHUNK_SIZE, 
+            chunk_overlap=DEFAULT_CHUNK_OVERLAP
+        )
+        logger.info("- Created DoclingChunkerAdapter instance.")
+    except Exception as e:
+        logger.error(f"Failed to initialize DoclingChunkerAdapter: {e}")
+        traceback.print_exc()
+        raise RuntimeError(f"Application startup failed: {e}")
+
+    # 임베딩 어댑터 생성
+    try:
+        embedder_adapter = BgeM3EmbedderAdapter(
+            model_name=EMBEDDING_MODEL_NAME,
+            device=EMBEDDING_DEVICE
+        )
+        logger.info("- Created BgeM3EmbedderAdapter instance.")
+    except Exception as e:
+        logger.error(f"Failed to initialize BgeM3EmbedderAdapter: {e}")
+        traceback.print_exc()
+        raise RuntimeError(f"Application startup failed: {e}")
+
+    # Milvus 어댑터 생성 시도
+    persistence_adapter = None
+    try:
+        token = None
+        if MILVUS_USER and MILVUS_PASSWORD:
+            token = f"{MILVUS_USER}:{MILVUS_PASSWORD}"
+            
         persistence_adapter = MilvusAdapter(
             host=MILVUS_HOST,
             port=MILVUS_PORT,
             collection_name=MILVUS_COLLECTION,
-            token=f"{MILVUS_USER}:{MILVUS_PASSWORD}"  # user와 password를 token으로 결합
+            token=token
         )
         logger.info("- Created MilvusAdapter instance and attempted connection.")
     except Exception as e:
-         logger.warning(f"--- WARNING: Failed to initialize MilvusAdapter. Persistence functionality may not work. --- Error: {e}")
-         # DB 연결 실패 시 애플리케이션 시작을 중단할지, 아니면 경고만 남기고 계속 진행할지 정책 결정이 필요합니다.
-         # 현재 코드는 경고만 남기고 persistence_adapter를 None으로 둡니다.
-         # 유스케이스는 persistence_port가 필수이므로, 아래 유스케이스 생성 시 오류가 발생하거나,
-         # 유스케이스가 None을 허용하도록 수정해야 합니다.
-         # 현재 유스케이스 코드는 persistence_port가 필수이므로, persistence_adapter가 None이면 여기서 TypeError 발생합니다.
+        logger.warning(f"--- WARNING: Failed to initialize MilvusAdapter. Using dummy adapter instead. --- Error: {e}")
+        # 실패 시 더미 어댑터 사용
+        persistence_adapter = DummyMilvusAdapter()
+        logger.info("- Created DummyMilvusAdapter as fallback.")
 
+    # 유스케이스 인스턴스 생성
+    try:
+        ingest_use_case_instance = IngestDocumentUseCase(
+            parser_port=parser_adapter,
+            chunking_port=chunker_adapter,
+            embedding_port=embedder_adapter,
+            persistence_port=persistence_adapter,
+            api_key_port=apikey_adapter
+        )
+        logger.info("- Created IngestDocumentUseCase instance and injected dependencies.")
+    except Exception as e:
+        logger.error(f"Failed to initialize IngestDocumentUseCase: {e}")
+        traceback.print_exc()
+        raise RuntimeError(f"Application startup failed: {e}")
 
-    # --- 2. 애플리케이션 계층 유스케이스 인스턴스 생성 ---
-    # IngestDocumentUseCase는 DocumentProcessingInputPort를 구현하며, 필요한 출력 포트 구현체(세컨더리 어댑터)들을 주입받습니다.
-    # 유스케이스의 __init__ 메서드에 정의된 파라미터에 맞춰 모든 어댑터를 주입합니다.
-
-    # IngestDocumentUseCase는 persistence_port가 필수입니다. persistence_adapter가 None이면 유스케이스 생성 실패
-    # MilvusAdapter 초기화가 성공했다면 아래 코드는 정상 작동합니다.
-    ingest_use_case_instance = IngestDocumentUseCase(
-        parser_port=parser_adapter,
-        chunking_port=chunker_adapter,
-        embedding_port=embedder_adapter,
-        persistence_port=persistence_adapter, # <-- MilvusAdapter 인스턴스 주입 (성공했다면)
-        api_key_port=apikey_adapter # 유스케이스 자체도 API Key Port가 필요하다면 주입
-    )
-    logger.info("- Created IngestDocumentUseCase instance and injected dependencies.")
-
-
-    # --- 3. FastAPI 애플리케이션 인스턴스 생성 ---
+    # FastAPI 애플리케이션 인스턴스 생성
     app = FastAPI(
         title="RAG Hexagonal Document Ingestion System",
         description="Document ingestion and processing system based on Hexagonal Architecture, using Docling and Milvus.",
@@ -206,28 +207,13 @@ def create_app() -> FastAPI:
     )
     logger.info("- Created FastAPI application instance.")
 
-    # --- 4. 프라이머리 어댑터(FastAPI 라우터) 설정 및 애플리케이션에 포함 ---
-    # 프라이머리 어댑터의 setup 함수에 유스케이스 인스턴스(입력 포트 구현체)를 주입하여 라우터 설정
+    # API 라우터 설정
     api_router = setup_api_routes(input_port=ingest_use_case_instance)
     logger.info("- Configured API router with IngestDocumentUseCase.")
-
-    # 설정된 라우터를 FastAPI 애플리케이션에 포함시켜 실제 엔드포인트가 활성화되도록 합니다.
     app.include_router(api_router)
     logger.info("- Included API router in FastAPI app.")
 
-    # --- 5. 기타 초기화 로직 (선택 사항) ---
-    # @app.on_event("startup") 이벤트 핸들러 등록 등
-    # 예: @app.on_event("startup")에서 Milvus 컬렉션 로드 등 초기 DB 작업 수행 가능
-    # if persistence_adapter and hasattr(persistence_adapter, 'load_collection'): # 어댑터에 load_collection 메서드 필요
-    #      @app.on_event("startup")
-    #      async def load_milvus_collection():
-    #          try:
-    #              # 실제 pymilvus load_collection 호출 (MilvusAdapter 내부에 메서드 구현 필요)
-    #              persistence_adapter.load_collection(collection_name=MILVUS_COLLECTION)
-    #              logger.info(f"Milvus collection '{MILVUS_COLLECTION}' loaded on startup.")
-    #          except Exception as e:
-    #              logger.error(f"Error loading Milvus collection '{MILVUS_COLLECTION}' on startup: {e}")
-
+    # 미들웨어 설정
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
         """HTTP 요청 및 응답을 로깅하는 미들웨어"""
@@ -240,6 +226,16 @@ def create_app() -> FastAPI:
             logger.error(f"오류 발생: {str(e)}")
             raise
 
+    # 기본 라우트 추가
+    @app.get("/")
+    async def root():
+        return {"message": "RAG Document Processing API is running. See /docs for API documentation."}
+
+    @app.get("/health")
+    async def health_check():
+        """간단한 헬스 체크 엔드포인트"""
+        return {"status": "healthy"}
+
     logger.info("--- Application Assembly Complete ---")
     logger.info("Application is ready.")
     logger.info(f"__name__ 값: {__name__}")
@@ -247,17 +243,35 @@ def create_app() -> FastAPI:
     # 조립이 완료된 FastAPI 애플리케이션 인스턴스 반환
     return app
 
-# create_app 함수를 호출하여 애플리케이션 인스턴스 생성
-# MilvusAdapter 초기화 실패 시 create_app 내에서 예외가 발생하고 함수가 중단될 수 있습니다.
+# 전역 app 변수 생성
+app = None
+
+# 초기 시작 시도
 try:
     app = create_app()
     logger.info(f"애플리케이션 조립 완료: {app}")
-except Exception as e: # create_app 실행 중 발생하는 예외 처리
-    logger.error(f"--- FATAL ERROR: Application startup failed during assembly --- Error: {e}")
-    app = None # 앱 인스턴스 생성 실패
+except Exception as e:
+    logger.critical(f"--- FATAL ERROR: Application startup failed --- Error: {e}")
+    # 오류가 있더라도 최소한의 앱 생성 (상태 체크용)
+    app = FastAPI(title="RAG API (Error State)")
+    
+    @app.get("/")
+    async def error_root():
+        return {"status": "error", "message": f"Application startup failed: {str(e)}"}
+    
+    @app.get("/health")
+    async def error_health():
+        return {"status": "unhealthy", "message": str(e)}
 
-
-# --- 애플리케이션 실행 ---
-# create_app이 성공하고 app 인스턴스가 생성된 경우에만 서버 실행
-# 
+# 개발 모드에서 직접 실행 시
+if __name__ == "__main__":
+    # 파일 변경 감시 설정을 조정하여 메모리 오류 방지
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=8000, 
+        use_colors=True,
+        limit_max_requests=100,  # 메모리 누수 방지를 위한 최대 요청 수 제한
+        reload=False  # 혹은 reload_dirs를 직접 지정하여 감시할 디렉토리 제한
+    )
 

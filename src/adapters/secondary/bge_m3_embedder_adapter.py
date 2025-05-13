@@ -161,82 +161,71 @@ class BgeM3EmbedderAdapter(EmbeddingGenerationPort):
     # Hugging Face transformers 사용 시 필요한 풀링 함수는 이제 필요 없습니다.
 
     def generate_embeddings(self, chunks: List[DocumentChunk]) -> List[EmbeddingVector]:
-        texts = [chunk.content for chunk in chunks]
-        
         if not chunks:
             logger.info("BgeM3EmbedderAdapter: No chunks to embed. Skipping embedding generation.")
             return [] # 청크가 없으면 빈 목록 반환
+
+        # 1단계: DocumentChunk 목록에서 텍스트 내용 목록 준비
+        chunk_contents = [chunk.content for chunk in chunks]
+        logger.info(f"   Preparing to encode {len(chunk_contents)} text snippets...")
+
+        # 2단계: 임베딩 벡터 생성 (실제 모델 또는 모의 벡터)
+        embedding_vectors = []
 
         # self._embedding_function 인스턴스가 유효하면 실제 임베딩 실행
         if self._embedding_function is not None:
             logger.info("BgeM3EmbedderAdapter: Using configured BGEM3EmbeddingFunction.")
             try:
-                # 1단계: DocumentChunk 목록에서 텍스트 내용 목록 준비
-                chunk_contents = [chunk.content for chunk in chunks]
-                logger.info(f"   Encoding {len(chunk_contents)} text snippets...")
-
-                # 2단계: 문서 임베딩 생성 (encode_documents 메서드 사용)
+                # 임베딩 생성 (encode_documents 메서드 사용)
                 try:
-                    # encode_documents 메서드 사용 (문서 텍스트에 적합)
+                    # 먼저 encode_documents 메서드 시도
                     embedding_results_dict = self._embedding_function.encode_documents(chunk_contents)
-                    
-                    # 또는 __call__ 메서드를 사용할 수도 있음
-                    # embedding_results_dict = self._embedding_function(chunk_contents)
-                    
                     # 딕셔너리에서 dense 임베딩 추출
-                    dense_embeddings = embedding_results_dict["dense"]
-                    logger.info(f"   Successfully generated {len(dense_embeddings)} raw vectors using BGEM3EmbeddingFunction.")
-                    
-                    # 생성된 벡터 수와 청크 수가 일치하는지 확인
-                    if len(chunks) != len(dense_embeddings):
-                        logger.warning(f"Warning: Number of chunks ({len(chunks)}) and generated embeddings ({len(dense_embeddings)}) do not match.")
-                        raise EmbeddingError("Chunk and embedding count mismatch after encoding.")
-                    
-                    # dense_embeddings를 EmbeddingVector로 변환
-                    embeddings = []
-                    for i, vector in enumerate(dense_embeddings):
-                        chunk_metadata_ref = chunks[i].metadata.copy()
-                        embeddings.append(EmbeddingVector(vector=vector, metadata=chunk_metadata_ref))
-                    
-                except Exception as e:
-                    logger.error(f"BgeM3EmbedderAdapter: 임베딩 생성 중 오류 발생 - {e}")
-                    raise EmbeddingError(f"BGEM3EmbeddingFunction으로 임베딩 생성 실패: {e}") from e
-
-                logger.info(f"BgeM3EmbedderAdapter: Mapping complete. Created {len(embeddings)} EmbeddingVector objects.")
-                logger.info(f"[EMBEDDING] 성공: {len(embeddings)}개 임베딩 벡터 생성")
-                if embeddings:
-                    logger.info(f"  첫 임베딩 벡터 차원: {len(embeddings[0].vector)}")
+                    embedding_vectors = embedding_results_dict["dense"]
+                    logger.info(f"   Successfully generated vectors using encode_documents method.")
+                except (AttributeError, TypeError) as method_error:
+                    # encode_documents가 없거나 예상치 못한 인자를 받는 경우
+                    logger.warning(f"encode_documents 메서드를 사용할 수 없습니다: {method_error}. encode 메서드로 대체합니다.")
+                    # 대신 encode 메서드 시도
+                    embedding_vectors = self._embedding_function.encode(chunk_contents)
+                    logger.info(f"   Successfully generated vectors using encode method instead.")
                 
-                return embeddings
-
+                logger.info(f"   Generated {len(embedding_vectors)} raw vectors.")
+                
+                # 생성된 벡터 수와 청크 수가 일치하는지 확인
+                if len(chunks) != len(embedding_vectors):
+                    logger.warning(f"Warning: Number of chunks ({len(chunks)}) and generated embeddings ({len(embedding_vectors)}) do not match.")
+                    raise EmbeddingError("Chunk and embedding count mismatch after encoding.")
+                
             except Exception as e:
-                logger.error(f"BgeM3EmbedderAdapter: Error during actual embedding generation - {e}")
-                raise EmbeddingError(f"Failed to generate embeddings using BGEM3EmbeddingFunction: {e}") from e
+                logger.error(f"BgeM3EmbedderAdapter: 임베딩 생성 중 오류 발생 - {e}")
+                raise EmbeddingError(f"BGEM3EmbeddingFunction으로 임베딩 생성 실패: {e}") from e
 
         else:
-            # 모델이 없는 경우 모킹 로직 (기존 코드 유지)
-            # ---> 모킹 벡터 생성 (이전과 동일) <---
+            # 모델이 없는 경우 모의 임베딩 생성
             mock_dimension = 1024 # BGE-M3 차원 (1024로 추정)
-            embedding_results = [[random.random() for _ in range(mock_dimension)] for _ in chunks]
-            logger.info(f"   Generated {len(embedding_results)} mock vectors.")
+            embedding_vectors = [[random.random() for _ in range(mock_dimension)] for _ in chunks]
+            logger.info(f"   Generated {len(embedding_vectors)} mock vectors.")
 
-
-        # --- ★★★ 생성된 벡터 목록을 EmbeddingVector 도메인 모델 목록으로 변환 ★★★ ---
-        # 어댑터의 책임: 외부 기술 결과(벡터 리스트)를 내부 도메인 모델(EmbeddingVector 리스트)로 매핑
-        embeddings: List[EmbeddingVector] = []
+        # 3단계: 생성된 벡터를 EmbeddingVector 도메인 모델로 변환
         try:
             logger.info("   Mapping vectors to EmbeddingVector domain models...")
             result = []
-            for i, vector in enumerate(dense_vectors):
+            for i, vector in enumerate(embedding_vectors):
                 if i < len(chunks):
                     result.append(EmbeddingVector(
                         vector=vector,
                         metadata=chunks[i].metadata.copy()
                     ))
             
+            logger.info(f"BgeM3EmbedderAdapter: Created {len(result)} EmbeddingVector objects.")
+            logger.info(f"[EMBEDDING] 성공: {len(result)}개 임베딩 벡터 생성")
+            if result:
+                logger.info(f"  첫 임베딩 벡터 차원: {len(result[0].vector)}")
+            
             return result
             
         except Exception as e:
-            error_msg = f"Error during actual embedding generation - {e}"
+            error_msg = f"Error during embedding mapping - {e}"
             logger.error(error_msg)
             raise EmbeddingError(error_msg)
