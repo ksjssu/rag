@@ -35,11 +35,13 @@ except ImportError:
     # Dummy class for BGEM3EmbeddingFunction (minimal implementation)
     class BGEM3EmbeddingFunction: # <-- 더미 클래스 정의
         # 제공된 코드 기반 생성자 시그니처 반영
-        def __init__(self, model_name='dummy', device=None, use_fp16=False):
-             logger.info(f"   (Simulating Dummy BGEM3EmbeddingFunction initialization - Library not available) Model: {model_name}, Device: {device}, use_fp16={use_fp16}")
+        def __init__(self, model_name='dummy', device=None, use_fp16=False, batch_size=16, use_fast=True):
+             logger.info(f"   (Simulating Dummy BGEM3EmbeddingFunction initialization - Library not available) Model: {model_name}, Device: {device}, use_fp16={use_fp16}, use_fast={use_fast}")
              self._model_name = model_name
              self._device = device
              self._use_fp16 = use_fp16
+             self._use_fast = use_fast
+             self._batch_size = batch_size
              self._mock_dimension = 1024 # BGE-M3 차원 (1024로 추정)
 
         # encode 메서드 시뮬레이션
@@ -139,7 +141,8 @@ class BgeM3EmbedderAdapter(EmbeddingGenerationPort):
                      model_name=self._model_name,
                      device=self._device,
                      use_fp16=self._use_fp16,
-                     batch_size=16  # 배치 사이즈 명시적 설정
+                     batch_size=16,  # 배치 사이즈 명시적 설정
+                     use_fast=True  # 빠른 이미지 프로세서 사용
                  )
                  logger.info("BgeM3EmbedderAdapter: BGEM3EmbeddingFunction instance created successfully.")
              except Exception as e: # BGEM3EmbeddingFunction 초기화 중 발생할 수 있는 예외 처리

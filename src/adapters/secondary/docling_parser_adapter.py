@@ -42,7 +42,7 @@ try:
     from docling.datamodel.pipeline_options import (
         PipelineOptions, PdfPipelineOptions, EasyOcrOptions, 
         TableStructureOptions, AcceleratorOptions, TableFormerMode, 
-        granite_picture_description, PictureDescriptionApiOptions, ApiVlmOptions, ResponseFormat
+        granite_picture_description, PictureDescriptionApiOptions
     ) # <-- 정확한 경로: docling/datamodel/pipeline_options.py
 
     # 필요한 다른 Docling 모듈/클래스 임포트 (예외 클래스 등)

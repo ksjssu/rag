@@ -18,8 +18,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from docling.datamodel.pipeline_options import (
     PdfPipelineOptions,
-    EasyOcrOptions,
-    granite_picture_description
+    #granite_picture_description - 픽처 디스크립션 모드
 )
 
 # Configure logging
@@ -40,29 +39,10 @@ from src.adapters.secondary.docling_parser_adapter import DoclingParserAdapter
 from src.adapters.secondary.docling_chunker_adapter import DoclingChunkerAdapter
 from src.adapters.secondary.bge_m3_embedder_adapter import BgeM3EmbedderAdapter
 from src.adapters.secondary.env_apikey_adapter import EnvApiKeyAdapter
-from src.adapters.secondary.milvus_adapter import MilvusAdapter
+from src.adapters.secondary.milvus_adapter import MilvusAdapter, _milvus_library_available
 
-# --- 애플리케이션 설정 로드 ---
-# 환경 변수에서 설정을 로드하거나 기본값을 사용합니다.
-MILVUS_HOST: str = os.getenv("MILVUS_HOST", "localhost")
-MILVUS_PORT: int = int(os.getenv("MILVUS_PORT", 19530))
-MILVUS_COLLECTION: str = os.getenv("MILVUS_COLLECTION", "document_collection")
-MILVUS_USER: Optional[str] = os.getenv("MILVUS_USER", "")
-MILVUS_PASSWORD: Optional[str] = os.getenv("MILVUS_PASSWORD", "")
-
-# Docling 설정
-DOCLING_ALLOWED_FORMATS: List[str] = os.getenv("DOCLING_ALLOWED_FORMATS", "pdf,docx,xlsx,pptx,jpg,png").split(',')
-DOCLING_OCR_LANGUAGES: List[str] = os.getenv("DOCLING_OCR_LANGUAGES", "kor,eng").split(',')
-
-# 청킹 설정
-DEFAULT_CHUNK_SIZE: int = int(os.getenv("DEFAULT_CHUNK_SIZE", 1000))
-DEFAULT_CHUNK_OVERLAP: int = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))
-
-# 임베딩 모델 설정
-EMBEDDING_MODEL_NAME: str = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
-EMBEDDING_DEVICE: str = os.getenv("EMBEDDING_DEVICE", "cpu")
-
-# 더미 Milvus 어댑터 클래스 정의 (실제 Milvus를 사용할 수 없을 때 대체용)
+# --- 더미 어댑터 클래스 정의 ---
+# DummyMilvusAdapter 클래스: Milvus 연결 실패 시 사용하는 백업 어댑터
 class DummyMilvusAdapter:
     """Milvus 연결 실패 시 사용하는 더미 어댑터"""
     
@@ -80,7 +60,29 @@ class DummyMilvusAdapter:
     async def get_document(self, *args, **kwargs):
         logger.warning("DummyMilvusAdapter: get_document called, but no action taken")
         return None
+        
+    def save_document_data(self, chunks, embeddings):
+        logger.warning("DummyMilvusAdapter: save_document_data called, but no action taken")
+        return {"status": "dummy", "message": "Data not persisted in vector database"}
 
+# --- 애플리케이션 설정 로드 ---
+# 환경 변수에서 설정을 로드하거나 기본값을 사용합니다.
+MILVUS_HOST: str = os.getenv("MILVUS_HOST", "10.10.30.80")
+MILVUS_PORT: int = int(os.getenv("MILVUS_PORT", 30953))
+MILVUS_COLLECTION: str = os.getenv("MILVUS_COLLECTION", "test_250414")
+MILVUS_USER: Optional[str] = os.getenv("MILVUS_USER", "root")
+MILVUS_PASSWORD: Optional[str] = os.getenv("MILVUS_PASSWORD", "smr0701!")
+
+# Docling 설정
+DOCLING_ALLOWED_FORMATS: List[str] = os.getenv("DOCLING_ALLOWED_FORMATS", "pdf,docx,xlsx,pptx,jpg,png").split(',')
+
+# 청킹 설정
+DEFAULT_CHUNK_SIZE: int = int(os.getenv("DEFAULT_CHUNK_SIZE", 1000))
+DEFAULT_CHUNK_OVERLAP: int = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))
+
+# 임베딩 모델 설정
+EMBEDDING_MODEL_NAME: str = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
+EMBEDDING_DEVICE: str = os.getenv("EMBEDDING_DEVICE", "cpu")
 
 def create_app() -> FastAPI:
     """
@@ -94,37 +96,16 @@ def create_app() -> FastAPI:
     apikey_adapter = EnvApiKeyAdapter()
     logger.info("- Created EnvApiKeyAdapter instance.")
 
-    # OCR 옵션 설정
-    ocr_options = EasyOcrOptions(
-        lang=["ko", "en"],  # 한국어와 영어 지원
-        confidence_threshold=0.3,
-        download_enabled=True
-    )
-    ocr_options.force_full_page_ocr = True
-
-    # 기본 파이프라인 옵션 설정
+    # OCR 옵션 및 파이프라인 옵션 제거, 테이블/텍스트 추출만 활성화 (이미지 설명 완전 비활성화)
     pdf_options = PdfPipelineOptions(
-        do_ocr=True,  # OCR 활성화
-        ocr_options=ocr_options,  # OCR 옵션 설정
-        generate_page_images=True,  # OCR을 위한 이미지 생성
-        do_picture_description=True,  # 이미지 설명 활성화
-        picture_description_options=granite_picture_description,  # 기본 내장 모델 사용
+        do_ocr=False,  # OCR 비활성화
+        do_table_structure=True,  # 테이블 구조 추출 활성화
         images_scale=2.0,  # 이미지 크기 조정
         generate_picture_images=True  # 이미지 생성 활성화
     )
     
-    # 파이프라인 옵션 로깅
-    logger.info(f"Type of pdf_options.picture_description_options: {type(pdf_options.picture_description_options)}")
-    logger.info(f"Value of pdf_options.picture_description_options: {pdf_options.picture_description_options!r}")
-
-    # granite_picture_description이 객체이고 prompt 속성을 가지고 있는지 확인
-    if hasattr(pdf_options.picture_description_options, 'prompt'):
-        logger.info(f"Prompt on pdf_options.picture_description_options: {pdf_options.picture_description_options.prompt!r}")
-    else:
-        logger.info("pdf_options.picture_description_options does not have a 'prompt' attribute directly, or it might have been overwritten.")
-            
-    # 이미지 설명 옵션 활성화
-    logger.info("이미지 설명 기능이 활성화되었습니다.")
+    # 파이프라인 옵션 로깅 (이미지 설명 관련 부분 제거)
+    logger.info("파이프라인 옵션: OCR/테이블/텍스트 추출만 활성화, 이미지 설명 완전 비활성화")
     
     # 파서 어댑터 생성
     try:
@@ -132,6 +113,11 @@ def create_app() -> FastAPI:
             allowed_formats=DOCLING_ALLOWED_FORMATS,
             use_gpt_picture_description=False  # OpenAI 모델 사용하지 않음
         )
+        # DoclingParserAdapter 내부 파이프라인 옵션도 명시적으로 비활성화
+        if hasattr(parser_adapter, '_converter') and parser_adapter._converter is not None:
+            pdf_format_option = parser_adapter._converter.format_to_options.get('pdf')
+            if pdf_format_option and hasattr(pdf_format_option, 'pipeline_options'):
+                pdf_format_option.pipeline_options.do_picture_description = False
         logger.info("- Created DoclingParserAdapter instance.")
     except Exception as e:
         logger.error(f"Failed to initialize DoclingParserAdapter: {e}")
@@ -165,17 +151,25 @@ def create_app() -> FastAPI:
     # Milvus 어댑터 생성 시도
     persistence_adapter = None
     try:
-        token = None
-        if MILVUS_USER and MILVUS_PASSWORD:
-            token = f"{MILVUS_USER}:{MILVUS_PASSWORD}"
-            
-        persistence_adapter = MilvusAdapter(
-            host=MILVUS_HOST,
-            port=MILVUS_PORT,
-            collection_name=MILVUS_COLLECTION,
-            token=token
-        )
-        logger.info("- Created MilvusAdapter instance and attempted connection.")
+        # Milvus 라이브러리 사용 가능 여부 확인
+        if not _milvus_library_available:
+            logger.warning("pymilvus 라이브러리를 사용할 수 없습니다. 더미 어댑터를 사용합니다.")
+            persistence_adapter = DummyMilvusAdapter()
+            logger.info("- Created DummyMilvusAdapter (pymilvus library not available).")
+        else:
+            # 인증 정보 구성
+            token = None
+            if MILVUS_USER and MILVUS_PASSWORD:
+                token = f"{MILVUS_USER}:{MILVUS_PASSWORD}"
+                
+            # MilvusAdapter 인스턴스 생성 시도
+            persistence_adapter = MilvusAdapter(
+                host=MILVUS_HOST,
+                port=MILVUS_PORT,
+                collection_name=MILVUS_COLLECTION,
+                token=token
+            )
+            logger.info("- Created MilvusAdapter instance and successfully connected.")
     except Exception as e:
         logger.warning(f"--- WARNING: Failed to initialize MilvusAdapter. Using dummy adapter instead. --- Error: {e}")
         # 실패 시 더미 어댑터 사용

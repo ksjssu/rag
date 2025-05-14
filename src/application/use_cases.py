@@ -75,7 +75,7 @@ class IngestDocumentUseCase(DocumentProcessingInputPort):
              반환 값은 저장된 청크 목록으로 유지합니다.)
         """
         # 초기 로그
-        logger.error(f"[USECASE] 시작: {raw_document.metadata.get('filename', 'unknown')}")
+        logger.info(f"[USECASE] 시작: {raw_document.metadata.get('filename', 'unknown')}")
         
         try:
             # None 검사 추가
@@ -99,11 +99,33 @@ class IngestDocumentUseCase(DocumentProcessingInputPort):
                 logger.error("IngestDocumentUseCase: parsed_document.content is None or missing")
                 return []
             
-            logger.error(f"[USECASE] 파싱 완료: 길이 {len(parsed_document.content)}")
+            logger.info(f"[USECASE] 파싱 완료: 길이 {len(parsed_document.content)}")
 
             # 2. 청킹 (청킹 포트 호출)
             chunks = self._chunking_port.chunk(parsed_document)
-            logger.error(f"[USECASE] 청킹 완료: 개수 {len(chunks)}")
+            logger.info(f"[USECASE] 청킹 완료: 개수 {len(chunks)}")
+            
+            # 테이블 및 처리 유형 관련 청크 확인
+            table_chunks = 0
+            image_chunks = 0
+            text_chunks = 0
+            
+            for chunk in chunks:
+                chunk_type = "text"  # 기본값
+                if 'source' in chunk.metadata:
+                    chunk_type = chunk.metadata['source']
+                
+                if chunk_type == "table":
+                    table_chunks += 1
+                    # 테이블 내용이 content에 제대로 포함되는지 확인
+                    if table_chunks <= 2:  # 처음 2개 테이블 청크만 로그에 출력
+                        logger.info(f"[TABLE CHUNK #{table_chunks}] 내용 샘플: {chunk.content[:100]}...")
+                elif chunk_type == "image":
+                    image_chunks += 1
+                else:
+                    text_chunks += 1
+            
+            logger.info(f"[USECASE] 청크 유형 통계: 텍스트={text_chunks}, 테이블={table_chunks}, 이미지={image_chunks}")
 
             # 청크가 없다면 임베딩 및 저장 단계 스킵
             if not chunks:
@@ -138,7 +160,7 @@ class IngestDocumentUseCase(DocumentProcessingInputPort):
              # 유스케이스는 이러한 하위 레벨 예외를 도메인 또는 애플리케이션 레벨의 예외로 래핑하여
              # 상위 호출자(프라이머리 어댑터)에게 다시 발생시키는 것이 좋습니다.
              logger.error(f"IngestDocumentUseCase: An error occurred during processing - {e}")
-             # 예외를 상위 호출자(프라이머리 어댑터)로 전파합니다.
+             # 예외를 상위 호출자(프라이머라 어댑터)로 전파합니다.
              raise
 
 # 다른 유스케이스들...
