@@ -2,6 +2,7 @@
 
 import logging
 from typing import List, Dict, Any, Iterable, Optional, Union
+import re
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -101,8 +102,8 @@ class DoclingChunkerAdapter(TextChunkingPort):
         # 기타 HybridChunker 초기화 파라미터가 있다면 여기에 추가
 
         # --- 폴백 청킹 설정 파라미터 이름을 main.py 호출과 일치하도록 수정 ---
-        chunk_size: int = 1000,  # <-- 이름이 chunk_size 로 변경되었습니다!
-        chunk_overlap: int = 200,  # <-- 이름이 chunk_overlap 로 변경되었습니다!
+        chunk_size: int = 3000,  # <-- 청크 사이즈를 1000에서 3000으로 증가
+        chunk_overlap: int = 300,  # <-- 오버랩도 약간 증가
     ):
         """
         DoclingChunkerAdapter 초기화. Docling HybridChunker 인스턴스를 생성하거나 폴백 설정을 가집니다.
@@ -255,8 +256,26 @@ class DoclingChunkerAdapter(TextChunkingPort):
                         logger.info(f"Processed chunk result {chunk_index} from Docling")
 
                         if chunk_content:
+                            # 제목 정보가 있으면 청크 앞에 추가
+                            heading_text = ""
+                            if hasattr(docling_meta_object, 'headings') and docling_meta_object.headings:
+                                headings = docling_meta_object.headings
+                                # 리스트 또는 문자열 형태의 headings 처리
+                                if isinstance(headings, list):
+                                    # 가장 가까운 제목 최대 2개만 가져오기
+                                    relevant_headings = headings[-2:] if len(headings) > 1 else headings
+                                    heading_text = " > ".join(relevant_headings)
+                                elif isinstance(headings, str):
+                                    heading_text = headings
+                                
+                                if heading_text:
+                                    # 제목을 청크 앞에 추가 (구분자 사용)
+                                    chunk_content = f"[제목: {heading_text}]\n\n{chunk_content}"
+                                    logger.info(f"청크에 제목 추가됨: {heading_text}")
+                            
                             chunks.append(DocumentChunk(content=chunk_content, metadata=current_chunk_metadata))
                             chunk_index += 1
+                            logger.info(f"Docling 청크 생성: 길이={len(chunk_content)} 문자")
                         else:
                             logger.warning(f"Skipping empty Docling chunk result from library at index {chunk_index}")
 
@@ -278,25 +297,183 @@ class DoclingChunkerAdapter(TextChunkingPort):
             base_metadata = parsed_document.metadata.copy()
             base_metadata.pop('__internal_docling_document__', None)
 
+            # 테이블 감지 및 처리 - 폴백 로직에 추가
+            # 여기서 파싱된 문서에서 테이블을 찾고 각 테이블에 대해 별도의 청크 생성
+            tables_processed = False
+            processed_table_hashes = set()  # 중복 테이블 방지를 위한 해시 집합
+            
+            if hasattr(parsed_document, 'tables') and parsed_document.tables and len(parsed_document.tables) > 0:
+                logger.info(f"테이블 감지됨: {len(parsed_document.tables)}개 테이블 개별 처리")
+                
+                for table_idx, table in enumerate(parsed_document.tables):
+                    table_content = ""
+                    table_position = None
+                    
+                    # 테이블 콘텐츠 추출
+                    if isinstance(table, dict):
+                        if 'content' in table and table['content']:
+                            table_content = table['content']
+                        if 'position' in table:
+                            table_position = table['position']
+                        # 테이블 구조 정보가 있으면 추출
+                        if 'structure' in table and table['structure']:
+                            # 테이블 구조 정보를 문자열로 변환하여 콘텐츠에 추가
+                            structure_str = str(table['structure'])
+                            # 구조 정보를 테이블 내용에 추가 (구분자 추가)
+                            table_content = f"{table_content}\n\n[테이블 구조]\n{structure_str}"
+                            logger.info(f"테이블 {table_idx+1}에 구조 정보 추가됨 (길이: {len(structure_str)} 문자)")
+                    
+                    # 테이블 콘텐츠가 없는 경우는 건너뜀
+                    if not table_content:
+                        logger.info(f"테이블 {table_idx+1}의 내용이 없어 처리하지 않음")
+                        continue
+                    
+                    # 테이블 콘텐츠 해시 생성 (중복 방지)
+                    import hashlib
+                    table_hash = hashlib.md5(table_content.encode('utf-8')).hexdigest()
+                    
+                    # 이미 처리한 동일 테이블인지 확인
+                    if table_hash in processed_table_hashes:
+                        logger.info(f"테이블 {table_idx+1}은 이미 처리된 중복 테이블이므로 건너뜀")
+                        continue
+                    
+                    # 해시를 추가하여 이후 중복 방지
+                    processed_table_hashes.add(table_hash)
+                    
+                    # 테이블 메타데이터 생성
+                    table_metadata = base_metadata.copy()
+                    table_metadata["chunk_index"] = chunk_index
+                    table_metadata["source"] = "table"  # 소스를 'table'로 명시적 설정
+                    table_metadata["table_index"] = table_idx
+                    table_metadata["table_hash"] = table_hash  # 테이블 해시 추가
+                    
+                    # 테이블 콘텐츠 정보 로깅
+                    content_preview = table_content[:100] + "..." if len(table_content) > 100 else table_content
+                    logger.info(f"테이블 {table_idx+1} 내용: {content_preview}")
+                    
+                    if table_position:
+                        table_metadata["position"] = table_position
+                        
+                    # 테이블 구조 정보 추가
+                    if 'structure' in table:
+                        table_metadata["table_structure"] = str(table['structure'])[:500]  # 구조 정보 일부만 저장
+                        # 로그에 테이블 구조 정보 추가됨을 표시
+                        logger.info(f"  - 메타데이터 테이블 구조: 있음 (메타데이터에 일부 저장)")
+                    
+                    # 테이블은 청킹하지 않고 하나의 청크로 저장
+                    chunks.append(DocumentChunk(content=table_content, metadata=table_metadata))
+                    
+                    # 테이블 청크 생성 후 로그 메시지 개선
+                    logger.info(f"테이블 {table_idx+1} 청크 생성 완료:")
+                    logger.info(f"  - 내용 길이: {len(table_content)} 문자")
+                    logger.info(f"  - 메타데이터 소스: {table_metadata.get('source')}")
+                    logger.info(f"  - 테이블 인덱스: {table_metadata.get('table_index')}")
+                    logger.info(f"  - 테이블 해시: {table_metadata.get('table_hash')[:8]}...")
+                    
+                    chunk_index += 1
+                    tables_processed = True
+            
+            # 추가: 청크 객체 유효성 검사 (테이블 청크 포함)
+            if chunks:
+                for i, chunk in enumerate(chunks):
+                    source_type = chunk.metadata.get('source', 'unknown')
+                    logger.info(f"청크 {i} 최종 검사: 타입={source_type}, 길이={len(chunk.content)}")
+            
+            # 일반 텍스트 청킹 항상 수행 - 기존의 if-else 구조 제거
+            logger.info("일반 텍스트 청킹 진행")
+            
             while start < text_len:
                 end = min(start + self._chunk_size, text_len)
-                chunk_content = text[start:end]
-
-                chunk_metadata = base_metadata.copy()
-                chunk_metadata["chunk_index"] = chunk_index
-                chunk_metadata["start_char"] = start
-                chunk_metadata["end_char"] = end
-
-                chunks.append(DocumentChunk(content=chunk_content, metadata=chunk_metadata))
-
-                if end == text_len:
-                    break
-                next_start = start + (self._chunk_size - self._chunk_overlap)
-                start = max(start + 1, next_start)
-                if start >= text_len:
-                    break
-                chunk_index += 1
-
+                
+                # 청크 경계 조정 개선 (문장 또는 단락 끝에서 자르기)
+                if end < text_len:
+                    # 우선 큰 단위(단락) 먼저 검색 - 더 멀리 검색 범위 확장
+                    next_para = text.find('\n\n', start, min(end + 500, text_len))
+                    
+                    # 단락 구분이 발견되면 그 위치로 끝 지점 조정
+                    if next_para > start and next_para < end + 500:
+                        end = next_para + 2
+                    else:
+                        # 단락이 없으면 2순위로 문장 끝 찾기
+                        # 마침표+공백 다음에 대문자가 오는 패턴 찾기
+                        next_sentence_end = -1
+                        for match in re.finditer(r'\. [A-Z가-힣]', text[start:min(end + 200, text_len)]):
+                            potential_end = start + match.start() + 1  # 마침표 위치까지만
+                            if potential_end > start and potential_end > end - 300:  # 너무 짧은 청크 방지
+                                next_sentence_end = potential_end
+                                break
+                        
+                        # 문장 끝이 발견되면 조정
+                        if next_sentence_end > 0:
+                            end = next_sentence_end + 1
+                        else:
+                            # 줄바꿈 찾기 (보다 멀리 검색)
+                            next_newline = text.find('\n', start, min(end + 200, text_len))
+                            if next_newline > start and next_newline < end + 200:
+                                end = next_newline + 1
+                
+                chunk_content = text[start:end].strip()
+                
+                # 내용이 있고 최소 길이(100자) 이상인 경우에만 청크 생성
+                # 너무 짧은 청크는 버림
+                if chunk_content and len(chunk_content) >= 100:
+                    chunk_metadata = base_metadata.copy()
+                    chunk_metadata["chunk_index"] = chunk_index
+                    chunk_metadata["start_char"] = start
+                    chunk_metadata["end_char"] = end
+                    chunk_metadata["source"] = "text"  # 명시적으로 'text' 지정
+                    
+                    # 제목 정보 추가
+                    chunk_content = self._add_heading_to_content(chunk_content, base_metadata)
+                    
+                    chunks.append(DocumentChunk(content=chunk_content, metadata=chunk_metadata))
+                    chunk_index += 1
+                    logger.info(f"일반 텍스트 청크 생성: 길이={len(chunk_content)} 문자")
+                else:
+                    logger.info(f"청크가 너무 짧아 건너뜀: 길이={len(chunk_content)} 문자")
+                
+                # 다음 청크 시작 위치로 이동
+                start = end
+            
+            # 테이블이 처리되었다는 메시지는 유지하되, 텍스트 청킹은 항상 실행
+            if tables_processed:
+                logger.info("테이블 데이터에 대한 청크도 생성되었습니다")
+                
+            # 이미지 설명 정보 처리 부분 유지 (이전과 동일)
+            if hasattr(parsed_document, 'image_descriptions') and parsed_document.image_descriptions:
+                logger.info(f"[CHUNKER] {len(parsed_document.image_descriptions)}개 이미지 설명 청킹 처리")
+                
+                for img_idx, img_desc in enumerate(parsed_document.image_descriptions):
+                    # 이미지 설명 추출
+                    description = ""
+                    image_id = ""
+                    
+                    if isinstance(img_desc, dict):
+                        description = img_desc.get('description', '')
+                        image_id = img_desc.get('image_id', '')
+                    else:
+                        # 객체인 경우 속성 접근 시도
+                        description = getattr(img_desc, 'description', '')
+                        image_id = getattr(img_desc, 'image_id', '')
+                    
+                    # 설명이 없으면 건너뜀
+                    if not description or not isinstance(description, str) or len(description.strip()) == 0:
+                        continue
+                    
+                    # 이미지 청크 메타데이터
+                    img_metadata = base_metadata.copy()
+                    img_metadata["chunk_index"] = chunk_index
+                    img_metadata["source"] = "image"
+                    img_metadata["image_id"] = image_id
+                    
+                    # 이미지 설명을 콘텐츠로 사용하되, 이미지 식별자 추가
+                    img_content = f"[이미지 {img_idx+1} 설명]\n{description}"
+                    
+                    # 이미지 청크 추가
+                    chunks.append(DocumentChunk(content=img_content, metadata=img_metadata))
+                    logger.info(f"이미지 설명 청크 추가: {img_idx+1}/{len(parsed_document.image_descriptions)}")
+                    chunk_index += 1
+            
             logger.info(f"DoclingChunkerAdapter: Chunking process finished. Generated {len(chunks)} chunks.")
 
         # 청크 생성 결과 출력 (일부만)
@@ -305,7 +482,7 @@ class DoclingChunkerAdapter(TextChunkingPort):
         display_limit = min(3, len(chunks))
         for i in range(display_limit):
             chunk = chunks[i]
-            logger.info(f"  청크 {i+1}: {len(chunk.content)} 문자")
+            logger.info(f"  청크 {i+1}: {len(chunk.content)} 문자, 소스={chunk.metadata.get('source', '알 수 없음')}")
             
             # 이미지 설명 정보 출력 (있는 경우)
             if 'image_description' in chunk.metadata and chunk.metadata['image_description']:
@@ -519,3 +696,27 @@ class DoclingChunkerAdapter(TextChunkingPort):
             logger.info(f"  ... 외 {chunk_count-display_limit}개 청크")
         
         return chunks
+
+    # 청크 내용에 제목 추가하는 유틸리티 함수
+    def _add_heading_to_content(self, chunk_content: str, metadata: Dict[str, Any]) -> str:
+        """청크 내용에 제목 정보가 있으면 추가하는 함수"""
+        if not chunk_content:
+            return chunk_content
+            
+        heading_text = ""
+        if 'headings' in metadata and metadata['headings']:
+            headings = metadata['headings']
+            # 리스트 또는 문자열 형태의 headings 처리
+            if isinstance(headings, list):
+                # 가장 가까운 제목 최대 2개만 가져오기
+                relevant_headings = headings[-2:] if len(headings) > 1 else headings
+                heading_text = " > ".join(relevant_headings)
+            elif isinstance(headings, str):
+                heading_text = headings
+            
+            if heading_text:
+                # 제목을 청크 앞에 추가 (구분자 사용)
+                chunk_content = f"[제목: {heading_text}]\n\n{chunk_content}"
+                logger.info(f"청크에 제목 추가됨: {heading_text}")
+                
+        return chunk_content

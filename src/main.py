@@ -21,12 +21,8 @@ from docling.datamodel.pipeline_options import (
     #granite_picture_description - 픽처 디스크립션 모드
 )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# 로거 설정 제거하고 config에서 가져오기
+from src.config import logger
 
 # --- 프라이머리 어댑터 설정 함수 임포트 ---
 from src.adapters.primary.api_adapter import setup_api_routes
@@ -69,7 +65,7 @@ class DummyMilvusAdapter:
 # 환경 변수에서 설정을 로드하거나 기본값을 사용합니다.
 MILVUS_HOST: str = os.getenv("MILVUS_HOST", "10.10.30.80")
 MILVUS_PORT: int = int(os.getenv("MILVUS_PORT", 30953))
-MILVUS_COLLECTION: str = os.getenv("MILVUS_COLLECTION", "test_250414")
+MILVUS_COLLECTION: str = os.getenv("MILVUS_COLLECTION", "test_250515")
 MILVUS_USER: Optional[str] = os.getenv("MILVUS_USER", "root")
 MILVUS_PASSWORD: Optional[str] = os.getenv("MILVUS_PASSWORD", "smr0701!")
 
@@ -77,7 +73,7 @@ MILVUS_PASSWORD: Optional[str] = os.getenv("MILVUS_PASSWORD", "smr0701!")
 DOCLING_ALLOWED_FORMATS: List[str] = os.getenv("DOCLING_ALLOWED_FORMATS", "pdf,docx,xlsx,pptx,jpg,png").split(',')
 
 # 청킹 설정
-DEFAULT_CHUNK_SIZE: int = int(os.getenv("DEFAULT_CHUNK_SIZE", 1000))
+DEFAULT_CHUNK_SIZE: int = int(os.getenv("DEFAULT_CHUNK_SIZE", 2000))
 DEFAULT_CHUNK_OVERLAP: int = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))
 
 # 임베딩 모델 설정

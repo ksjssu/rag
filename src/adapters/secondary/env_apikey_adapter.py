@@ -4,8 +4,8 @@ import os
 import logging
 from ports.output_ports import ApiKeyManagementPort
 
-# Configure logging
-logger = logging.getLogger(__name__)
+# config에서 로거 가져오기
+from src.config import logger
 
 class EnvApiKeyAdapter(ApiKeyManagementPort):
     """

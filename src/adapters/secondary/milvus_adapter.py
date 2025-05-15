@@ -8,30 +8,33 @@ from typing import List, Dict, Any, Optional, Tuple, Union, Callable, Iterable, 
 import time
 import os
 import json
+from time import sleep
 
 # 로거 임포트
 from src.config import logger
 
+_milvus_library_available = False
+
 try:
     # 성공 스크립트의 임포트 방식을 따릅니다.
-    from pymilvus import ( # <-- pymilvus 최상위 패키지에서 임포트 시도
-        MilvusClient,
-        Collection,
-        connections,
-        FieldSchema,
+    from pymilvus import (
+        connections, 
+        Collection, 
         CollectionSchema,
+        FieldSchema,
         DataType,
         utility,
+        MilvusClient,
+        MilvusException
     )
-    from pymilvus.exceptions import MilvusException # 예외는 보통 exceptions 모듈에 있습니다.
 
     _milvus_library_available = True
     logger.info("pymilvus library imported successfully.")
 except ImportError:
     # pymilvus 라이브러리를 설치하지 않았거나 임포트할 수 없는 경우
-    # 더미 클래스와 플래그를 정의합니다.
-    _milvus_library_available = False
+    import traceback
     logger.warning("Warning: pymilvus library not found. MilvusAdapter will not be functional.")
+    logger.warning(traceback.format_exc())
     # --- pymilvus가 없을 경우 더미 클래스 정의 (에러 방지 및 시뮬레이션) ---
     # 제공된 코드 스니펫의 클래스들을 더미로 정의합니다.
     logger.info("   Using dummy Milvus classes.")
@@ -148,141 +151,143 @@ class MilvusAdapter(VectorDatabasePort):
     문서 청크와 임베딩 벡터를 Milvus 컬렉션에 저장합니다.
     """
     def __init__(self, host=None, port=None, collection_name="test_250414", token=None, uri=None):
+        """
+        MilvusAdapter 초기화 및 Milvus 클라이언트 인스턴스 생성.
+        """
         logger.info("MilvusAdapter: 초기화 시작...")
         
-        self._collection_name = collection_name
         self._is_initialized_successfully = False
-        
+        self._host = host
+        self._port = port
+        self._token = token
+        self._collection_name = collection_name
+        self._client = None  # Milvus 클라이언트 인스턴스
+
         try:
-            from pymilvus import MilvusClient
+            # Milvus 클라이언트 인스턴스 생성
+            # Milvus 클라이언트 인스턴스 생성
             
             # uri가 제공되면 그대로 사용, 아니면 host와 port로 구성
             milvus_uri = uri
             if not milvus_uri and host and port:
                 milvus_uri = f"tcp://{host}:{port}"
-            
+                
             logger.info(f"Milvus URI: {milvus_uri}")
             
-            # 인증 정보 확인
-            user = None 
-            password = None
-            if token and ':' in token:
-                user, password = token.split(':', 1)
+            # 서버 연결
+            connections.connect(host=host, port=port, token=token)
             
-            # MilvusClient 생성
-            self._client = MilvusClient(
-                uri=milvus_uri,
-                user=user,
-                password=password,
-                secure=False     # SSL 비활성화
-            )
-            logger.info("MilvusClient 인스턴스 생성 완료")
-            
-            # 연결 상태 확인
             self._is_initialized_successfully = True
             logger.info("MilvusAdapter 초기화 완료")
             
         except Exception as e:
             import traceback
-            logger.error(f"Milvus 초기화 오류: {e}\n{traceback.format_exc()}")
-            self._client = None
+            logger.error(f"MilvusAdapter 초기화 실패: {e}\n{traceback.format_exc()}")
             self._is_initialized_successfully = False
-            raise MilvusAdapterError(f"Milvus 연결 실패: {e}")
 
     def _create_collection(self, vector_dimension=1024):
         """
-        지정된 이름과 스키마로 새로운 Milvus 컬렉션을 생성합니다.
-        
-        Args:
-            vector_dimension: 임베딩 벡터의 차원(기본값 1024, BGE-M3 기준)
+        Milvus 컬렉션을 생성합니다.
         """
+        logger.info(f"[STORAGE] '{self._collection_name}' 컬렉션 생성 시작...")
+        
         try:
-            logger.info(f"[STORAGE] 컬렉션 {self._collection_name} 생성 시도 (차원: {vector_dimension})")
+            # 필드 정의
+            fields = [
+                FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
+                FieldSchema(name="user_id", dtype=DataType.VARCHAR, max_length=64),
+                FieldSchema(name="document_id", dtype=DataType.VARCHAR, max_length=64),
+                FieldSchema(name="chunk_index", dtype=DataType.INT64),
+                FieldSchema(name="group_list", dtype=DataType.VARCHAR, max_length=65535),
+                FieldSchema(name="metadata", dtype=DataType.VARCHAR, max_length=65535),
+                FieldSchema(name="content", dtype=DataType.VARCHAR, max_length=65535),
+                FieldSchema(name="sparse_vector", dtype=DataType.VARCHAR, max_length=65535),
+                FieldSchema(name="sparse_model", dtype=DataType.VARCHAR, max_length=64),
+                FieldSchema(name="dense_vector", dtype=DataType.FLOAT_VECTOR, dim=vector_dimension),
+                FieldSchema(name="dense_model", dtype=DataType.VARCHAR, max_length=64),
+                FieldSchema(name="created_at", dtype=DataType.VARCHAR, max_length=64),
+                FieldSchema(name="updated_at", dtype=DataType.VARCHAR, max_length=64),
+            ]
             
-            # 스키마 생성
-            schema = self._client.create_schema(
-                auto_id=True,  # 자동 ID 생성
-                enable_dynamic_field=True,  # 동적 필드 활성화
-                description=f"RAG 애플리케이션을 위한 문서 컬렉션 (차원: {vector_dimension})"
-            )
-            
-            # 필드 추가
-            schema.add_field(field_name="id", datatype=DataType.INT64, is_primary=True, auto_id=True)
-            schema.add_field(field_name="user_id", datatype=DataType.VARCHAR, max_length=64)
-            schema.add_field(field_name="document_id", datatype=DataType.VARCHAR, max_length=256)
-            schema.add_field(field_name="chunk_index", datatype=DataType.INT64)
-            schema.add_field(field_name="group_list", datatype=DataType.VARCHAR, max_length=64)
-            schema.add_field(field_name="metadata", datatype=DataType.JSON)
-            schema.add_field(field_name="content", datatype=DataType.VARCHAR, max_length=65535)
-            schema.add_field(field_name="sparse_vector", datatype=DataType.VARCHAR, max_length=65535)  # 문자열로 저장
-            schema.add_field(field_name="sparse_model", datatype=DataType.VARCHAR, max_length=64)
-            schema.add_field(field_name="dense_vector", datatype=DataType.FLOAT_VECTOR, dim=vector_dimension)
-            schema.add_field(field_name="dense_model", datatype=DataType.VARCHAR, max_length=64)
-            schema.add_field(field_name="created_at", datatype=DataType.VARCHAR, max_length=32)
-            schema.add_field(field_name="updated_at", datatype=DataType.VARCHAR, max_length=32)
+            # 컬렉션 스키마 생성
+            schema = CollectionSchema(fields=fields, description=f"임베딩 벡터 저장용 {self._collection_name} 컬렉션")
             
             # 컬렉션 생성
-            self._client.create_collection(
-                collection_name=self._collection_name,
-                schema=schema,
-                consistency_level="Strong"
-            )
+            collection = Collection(name=self._collection_name, schema=schema)
             
-            # 인덱스 생성 (dense_vector 필드에 대한 HNSW 인덱스)
+            # 인덱스 생성 (dense_vector 필드에 대한 IVF_FLAT 인덱스)
             index_params = {
-                "metric_type": "COSINE",
-                "index_type": "HNSW",
-                "params": {"M": 16, "efConstruction": 200}
+                "metric_type": "L2",
+                "index_type": "IVF_FLAT",
+                "params": {"nlist": 128}
             }
             
-            self._client.create_index(
-                collection_name=self._collection_name,
+            collection.create_index(
                 field_name="dense_vector",
                 index_params=index_params
             )
             
-            logger.info(f"[STORAGE] 컬렉션 {self._collection_name} 생성 완료")
+            # 인덱스 생성 대기
+            while not collection.has_index():
+                logger.info("인덱스 생성 대기 중...")
+                sleep(1)  # 1초 대기
+            
+            logger.info(f"[STORAGE] '{self._collection_name}' 컬렉션 생성 완료")
             return True
-        
+            
         except Exception as e:
-            logger.error(f"[STORAGE] 컬렉션 생성 실패: {e}")
+            import traceback
+            logger.error(f"[STORAGE] 컬렉션 생성 실패: {e}\n{traceback.format_exc()}")
             return False
     
     def _ensure_collection_exists(self, vector_dimension=1024):
         """
-        컬렉션이 존재하는지 확인하고, 없으면 생성합니다.
-        
-        Args:
-            vector_dimension: 임베딩 벡터의 차원
-            
-        Returns:
-            bool: 컬렉션이 존재하거나 성공적으로 생성되었으면 True, 아니면 False
-            dict: 컬렉션 스키마 정보 (필드 구조 등)
+        Milvus 컬렉션이 존재하는지 확인하고, 없으면 생성합니다.
         """
         try:
             # 컬렉션 존재 여부 확인
-            has_collection = False
-            collection_info = None
+            exists = utility.has_collection(self._collection_name)
             
-            try:
-                collection_info = self._client.describe_collection(collection_name=self._collection_name)
-                if collection_info:
-                    has_collection = True
-                    logger.info(f"[STORAGE] 컬렉션 {self._collection_name} 이미 존재함")
-            except Exception as e:
-                logger.info(f"[STORAGE] 컬렉션 {self._collection_name} 존재하지 않음: {e}")
-                has_collection = False
-            
-            # 컬렉션이 없으면 생성
-            if not has_collection:
-                logger.info(f"[STORAGE] 컬렉션 {self._collection_name} 생성 시작...")
-                return self._create_collection(vector_dimension), None
-            
-            return True, collection_info
-        
+            if not exists:
+                # 컬렉션이 없으면 생성
+                logger.info(f"[STORAGE] 컬렉션 '{self._collection_name}'이 존재하지 않습니다. 새로 생성합니다...")
+                success = self._create_collection(vector_dimension)
+                if not success:
+                    raise MilvusAdapterError(f"Failed to create collection {self._collection_name}")
+            else:
+                # 컬렉션이 이미 존재하는 경우
+                logger.info(f"[STORAGE] 컬렉션 '{self._collection_name}'이 이미 존재합니다.")
+                
+                # 컬렉션 로드 - 검색을 위해 메모리에 로드
+                collection = Collection(self._collection_name)
+                
+                # 인덱스가 없으면 생성
+                if not collection.has_index():
+                    logger.info("기존 컬렉션에 인덱스가 없습니다. 인덱스를 생성합니다...")
+                    index_params = {
+                        "metric_type": "L2",
+                        "index_type": "IVF_FLAT",
+                        "params": {"nlist": 128}
+                    }
+                    collection.create_index(field_name="dense_vector", index_params=index_params)
+                    
+                    # 인덱스 생성 대기
+                    while not collection.has_index():
+                        logger.info("인덱스 생성 대기 중...")
+                        sleep(1)
+                        
+                    logger.info("인덱스 생성 완료")
+                
+                # 컬렉션 로드 (필요한 경우)
+                try:
+                    collection.load()
+                    logger.info(f"[STORAGE] 컬렉션 '{self._collection_name}' 로드 완료")
+                except Exception as e:
+                    logger.warning(f"[STORAGE] 컬렉션 로드 시 경고: {e}")
         except Exception as e:
-            logger.error(f"[STORAGE] 컬렉션 존재 확인 중 오류: {e}")
-            return False, None
+            import traceback
+            logger.error(f"[STORAGE] 컬렉션 {self._collection_name} 확인/생성 중 오류: {e}\n{traceback.format_exc()}")
+            raise MilvusAdapterError(f"Failed to ensure collection {self._collection_name} exists.") from e
 
     def _get_collection_fields(self, collection_info):
         """
@@ -324,183 +329,120 @@ class MilvusAdapter(VectorDatabasePort):
     # --- save_document_data 메서드 상세 구현 ---
     def save_document_data(self, chunks: List[DocumentChunk], embeddings: List[EmbeddingVector]) -> None:
         """
-        문서 청크 목록과 해당하는 임베딩 벡터 목록을 Milvus 컬렉션에 저장합니다.
+        문서 청크와 임베딩 벡터 정보를 Milvus에 저장합니다.
         """
-        logger.info(f"[STORAGE] 시작: {len(chunks)}개 청크와 {len(embeddings)}개 임베딩 저장 시도")
-
-        # 어댑터가 유효하고 초기화 성공했는지 확인
-        if not self._is_initialized_successfully or self._client is None:
+        if not self._is_initialized_successfully:
             error_msg = "MilvusAdapter: Adapter not successfully initialized. Cannot save data."
             logger.error(error_msg)
             raise MilvusAdapterError(error_msg)
-
-        # 청크와 임베딩 개수 일치 확인
+            
+        if not chunks or not embeddings:
+            logger.warning("[STORAGE] 저장할 청크 또는 임베딩이 없습니다.")
+            return
+            
         if len(chunks) != len(embeddings):
-            error_msg = f"MilvusAdapter: Mismatch between number of chunks ({len(chunks)}) and embeddings ({len(embeddings)}). Must be 1:1."
-            logger.error(error_msg)
-            raise MilvusAdapterError(error_msg)
-
-        # 저장할 데이터가 없는 경우 처리
-        if not chunks:
-            logger.info("MilvusAdapter: No data to save. Skipping Milvus operation.")
-            return # 저장할 데이터가 없으면 바로 반환
-            
-        # 임베딩 차원 확인 (첫 번째 임베딩 벡터 사용)
-        vector_dimension = 1024  # 기본값
-        if embeddings and hasattr(embeddings[0], 'vector') and len(embeddings[0].vector) > 0:
-            vector_dimension = len(embeddings[0].vector)
-            logger.info(f"[STORAGE] 임베딩 차원 감지: {vector_dimension}")
-        
-        # 컬렉션 존재 확인 및 생성
-        exists, collection_info = self._ensure_collection_exists(vector_dimension)
-        if not exists:
-            error_msg = f"MilvusAdapter: Failed to ensure collection {self._collection_name} exists."
+            error_msg = f"[STORAGE] 청크 수({len(chunks)})와 임베딩 수({len(embeddings)})가 일치하지 않습니다."
             logger.error(error_msg)
             raise MilvusAdapterError(error_msg)
             
-        # 컬렉션 필드 구조 확인
-        collection_fields = self._get_collection_fields(collection_info)
-        logger.info(f"[STORAGE] 컬렉션 필드 구조: {collection_fields}")
-        
-        # 기존 컬렉션이 있는 경우 예상 필드 네이밍
-        default_fields = ["dense_embedding", "sparse_embedding", "metadata"]
-        
-        # 필드 구조 분석 및 매핑 결정
-        use_new_schema = False
-        has_dynamic_field = False
-        vector_field_name = "dense_vector"  # 기본값
-        metadata_field_name = "metadata"    # 기본값
-        
-        # 컬렉션 정보에서 dynamic field 지원 여부 확인
-        if collection_info and 'schema' in collection_info:
-            schema = collection_info['schema']
-            if 'enable_dynamic_field' in schema:
-                has_dynamic_field = schema['enable_dynamic_field']
-                logger.info(f"[STORAGE] 컬렉션 dynamic field 지원: {has_dynamic_field}")
+        # 컬렉션 존재 여부 확인
+        try:
+            # 벡터 차원 확인 (첫 번째 임베딩 벡터 사용)
+            vector_dimension = 1024  # 기본값
+            if embeddings and hasattr(embeddings[0], 'vector') and len(embeddings[0].vector) > 0:
+                vector_dimension = len(embeddings[0].vector)
+                logger.info(f"[STORAGE] 임베딩 차원 감지: {vector_dimension}")
                 
-        # 1. "dense_vector"가 있으면 새 스키마 사용
-        if "dense_vector" in collection_fields:
-            use_new_schema = True
-            vector_field_name = "dense_vector"
-        # 2. "dense_embedding"이 있으면 기존 스키마 사용
-        elif "dense_embedding" in collection_fields:
-            use_new_schema = False
-            vector_field_name = "dense_embedding"
+            self._ensure_collection_exists(vector_dimension)
+        except Exception as e:
+            import traceback
+            logger.error(f"[STORAGE] 컬렉션 확인 중 오류: {e}\n{traceback.format_exc()}")
+            raise MilvusAdapterError(f"MilvusAdapter: Failed to ensure collection {self._collection_name} exists.") from e
             
-        logger.info(f"[STORAGE] 사용할 스키마: {'새 스키마' if use_new_schema else '기존 스키마'}, 벡터 필드: {vector_field_name}")
-
-        # --- 데이터 준비: DocumentChunk/EmbeddingVector -> Milvus 삽입 형식 ---
-        entities_to_insert = []
-        current_time = time.strftime('%Y-%m-%d %H:%M:%S')
+        # 삽입할 레코드 준비
+        records = []
         
         try:
-            logger.info(f"   Preparing {len(chunks)} entities for Milvus insertion...")
             for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-                # 필수 메타데이터 추출
-                chunk_metadata = chunk.metadata.copy()
+                # 메타데이터는 JSON으로 직렬화
+                metadata_copy = chunk.metadata.copy() if chunk.metadata else {}
                 
-                # 원본 문서 파일명 추출
-                document_id = chunk_metadata.get('filename', 'unknown')
+                # 청크 인덱스 추출 - 변경: 먼저 chunk_index 값을 가져오기
+                chunk_index = metadata_copy.get('chunk_index', i)
                 
-                # 청크 인덱스 추출
-                chunk_index = chunk_metadata.get('chunk_index', i)
+                # 소스(타입) 추출 - 청크 유형 명시적 파악
+                chunk_source = metadata_copy.get('source', 'text')  # 기본값은 'text'
                 
-                # 컨텐츠 준비 (테이블 내용 포함)
-                content = chunk.content
-
-                # 처리 유형 분류 (텍스트/이미지/테이블)
-                content_type = "text"  # 기본값
-                if 'source' in chunk_metadata:
-                    content_type = chunk_metadata['source']
-                elif 'table_count' in chunk_metadata and chunk_metadata['table_count'] > 0:
-                    content_type = "table"
-                elif 'image_count' in chunk_metadata and chunk_metadata['image_count'] > 0:
-                    content_type = "image"
+                # 청크 소스 유형에 대한 로깅 추가
+                logger.info(f"  청크 {chunk_index} 유형: {chunk_source}")
                 
-                # 기존/새 스키마에 따라 데이터 준비
-                if use_new_schema and (has_dynamic_field or "user_id" in collection_fields):
-                    # 새로운 스키마: user_id, document_id, content 등 모든 필드 포함
-                    # 간소화된 메타데이터 생성
-                    simple_metadata = {
-                        "source": document_id,
-                        "index": chunk_index,
-                        "type": content_type,
-                        "page_number": chunk_metadata.get('page_number')
-                    }
+                # 간소화된 메타데이터 생성
+                simplified_metadata = {
+                    "source": metadata_copy.get('filename', os.path.basename(metadata_copy.get('document_id', 'unknown'))),
+                    "index": chunk_index,
+                    "type": chunk_source  # 확인된 소스 타입 사용
+                }
+                
+                # 테이블 타입인 경우 추가 로깅
+                if chunk_source == 'table':
+                    logger.info(f"  테이블 청크 {chunk_index} 인식 - 메타데이터에 테이블 타입으로 설정")
+                    # 테이블 구조 정보가 있으면 로깅
+                    if 'table_structure' in metadata_copy:
+                        structure_preview = str(metadata_copy['table_structure'])[:100]
+                        if len(str(metadata_copy['table_structure'])) > 100:
+                            structure_preview += "..."
+                        logger.info(f"  테이블 구조 정보: {structure_preview}")
                     
-                    # 스파스 벡터 처리 (문자열로 저장)
-                    sparse_vector = "[]"
-                    
-                    # 엔티티 딕셔너리 생성
-                    entity = {
-                        "user_id": "user_001",
-                        "document_id": document_id,
-                        "chunk_index": chunk_index,
-                        "group_list": "group_a",
-                        "metadata": json.dumps(simple_metadata, ensure_ascii=False),
-                        "content": content,
-                        "sparse_vector": sparse_vector,
-                        "sparse_model": "bge-m3",
-                        vector_field_name: embedding.vector,
-                        "dense_model": "bge-m3",
-                        "created_at": current_time,
-                        "updated_at": current_time
-                    }
-                else:
-                    # 기존 스키마: dense_embedding, sparse_embedding, metadata만 포함
-                    # 메타데이터에 모든 정보 포함
-                    metadata_value = {
-                        "chunk_text": content,
-                        "source_file": document_id,
-                        "chunk_index": chunk_index,
-                        "page_number": chunk_metadata.get('page_number'),
-                        "content_type": content_type,
-                        "user_id": "user_001",
-                        "group_list": "group_a",
-                        "created_at": current_time
-                    }
-                    
-                    # 엔티티 딕셔너리 생성 (기존 스키마)
-                    entity = {
-                        vector_field_name: embedding.vector,
-                        "sparse_embedding": {},  # 기존 스키마 호환성
-                        metadata_field_name: json.dumps(metadata_value, ensure_ascii=False)
-                    }
+                    # 테이블 해시 정보 로깅 (있는 경우)
+                    if 'table_hash' in metadata_copy:
+                        logger.info(f"  테이블 해시: {metadata_copy['table_hash'][:8]}...")
                 
-                entities_to_insert.append(entity)
-
-            logger.info(f"[STORAGE] 준비된 엔티티: {len(entities_to_insert)}개")
-            if len(entities_to_insert) > 0:
-                logger.info(f"[STORAGE] 엔티티 샘플 필드: {list(entities_to_insert[0].keys())}")
-
-        except Exception as e:
-            error_msg = f"MilvusAdapter: Error preparing data for Milvus: {e}"
-            logger.error(error_msg)
-            raise MilvusAdapterError(error_msg) from e
-
-        # --- 데이터 저장: Milvus 클라이언트의 insert 메서드 호출 ---
-        try:
-            logger.info(f"[STORAGE] Milvus insert 호출...")
+                # 메타데이터 JSON 변환
+                metadata_str = json.dumps(simplified_metadata, cls=CustomJSONEncoder)
+                
+                # 문서 ID 추출
+                document_id = metadata_copy.get('document_id', metadata_copy.get('filename', 'unknown_document'))
+                
+                # 현재 시간
+                current_time = time.strftime('%Y-%m-%d %H:%M:%S')
+                
+                # dense 벡터 추출
+                dense_vector = embedding.vector
+                
+                # Milvus에 삽입할 레코드 생성
+                record = {
+                    "user_id": metadata_copy.get('user_id', 'default_user'),
+                    "document_id": document_id,
+                    "chunk_index": chunk_index,
+                    "group_list": metadata_copy.get('group_list', ''),
+                    "metadata": metadata_str,
+                    "content": chunk.content,
+                    "sparse_vector": json.dumps([0.0] * 100),  # 빈 sparse 벡터
+                    "sparse_model": "none",
+                    "dense_vector": dense_vector,
+                    "dense_model": "bge-m3",
+                    "created_at": current_time,
+                    "updated_at": current_time,
+                }
+                
+                records.append(record)
             
-            # insert 호출
-            mutation_result = self._client.insert(
-                collection_name=self._collection_name,
-                data=entities_to_insert
-            )
+            # 컬렉션 로드
+            collection = Collection(self._collection_name)
             
-            # 성공 여부 로깅
-            logger.info(f"[STORAGE] 성공: Milvus 응답 = {mutation_result}")
-
-        except MilvusException as e:
-            error_msg = f"MilvusAdapter: Milvus operation error during insert: {e}"
-            logger.error(error_msg)
-            raise MilvusAdapterError(error_msg) from e
+            # 데이터 삽입
+            logger.info(f"[STORAGE] Milvus에 {len(records)}개 레코드 삽입 시도 중...")
+            result = collection.insert(records)
+            
+            # 변경사항 즉시 기록
+            collection.flush()
+            
+            logger.info(f"[STORAGE] 성공: Milvus 응답 = {result}")
+            
         except Exception as e:
-            error_msg = f"MilvusAdapter: An unexpected error occurred during Milvus insert: {e}"
+            error_msg = f"[STORAGE] 데이터 저장 실패: {e}"
             logger.error(error_msg)
             raise MilvusAdapterError(error_msg) from e
-
-        logger.info(f"MilvusAdapter: Save operation finished for {len(entities_to_insert)} entities.")
 
     # --- 검색 기능 메서드 (RAG 검색 단계 필요시 구현) ---
     # VectorDatabasePort에 search_similar_vectors 메서드가 있다면 여기서 구현합니다.
