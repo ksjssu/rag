@@ -4,6 +4,7 @@ import logging
 import random
 from typing import List, Dict, Any, Optional
 import math
+import numpy as np
 
 # 로거 임포트
 from src.config import logger
@@ -52,6 +53,34 @@ except ImportError:
              mock_embeddings = [[random.random() for _ in range(self._mock_dimension)] for _ in sentences]
              logger.info(f"   (Simulating successful encode of {len(sentences)} embeddings)")
              return mock_embeddings
+             
+        # encode_documents 메서드 시뮬레이션 (bge_m3.py 참고) - 딕셔너리 반환
+        def encode_documents(self, documents):
+            logger.info(f"   (Simulating Dummy BGEM3EmbeddingFunction.encode_documents) Encoding {len(documents)} documents...")
+            import random # 모킹용
+            
+            # 결과는 Dictionary 형태로 시뮬레이션 (dense와 sparse 모두 포함)
+            mock_dense = [[random.random() for _ in range(self._mock_dimension)] for _ in documents]
+            
+            # sparse 벡터를 위한 mock lexical_weights 생성 (BGE-M3 방식과 유사하게)
+            mock_lexical_weights = []
+            sparse_dim = 30522  # 가상의 토크나이저 크기
+            
+            for _ in documents:
+                # 각 문서마다 10-20개의 랜덤 토큰 인덱스 생성
+                num_tokens = random.randint(10, 20)
+                indices = random.sample(range(sparse_dim), num_tokens)
+                # 각 인덱스에 랜덤 가중치 할당
+                mock_dict = {str(idx): random.random() for idx in indices}
+                mock_lexical_weights.append(mock_dict)
+            
+            mock_result = {
+                "dense": mock_dense,
+                "lexical_weights": mock_lexical_weights
+            }
+            
+            logger.info(f"   (Simulating successful encode_documents with both dense and sparse vectors)")
+            return mock_result
 
     # BaseTokenizer 더미 클래스는 DoclingChunkerAdapter에서 사용되므로 여기서는 필요 없습니다.
     # DoclingDocument 더미 클래스도 마찬가지입니다.
@@ -85,11 +114,35 @@ class DummyEmbedderAdapter(EmbeddingGenerationPort):
             return []
         # Mock embedding generation logic (same as before)
         mock_embeddings_list = [[random.random() for _ in range(self._mock_dimension)] for _ in chunks]
+        
+        # sparse 벡터 목업 생성 (sparse_vector 필드에 Dict[int, float] 형태로)
+        mock_sparse_vectors = []
+        mock_colbert_vectors = []
+        
+        for _ in chunks:
+            # 각 문서마다 5-10개의 랜덤 토큰 인덱스 생성
+            num_tokens = random.randint(5, 10)
+            sparse_dim = 30522  # 가상의 토크나이저 크기
+            indices = random.sample(range(sparse_dim), num_tokens)
+            # 각 인덱스에 랜덤 가중치 할당 (str 키가 아닌 int 키 사용)
+            mock_sparse = {idx: random.random() for idx in indices}
+            mock_sparse_vectors.append(mock_sparse)
+            
+            # 모의 colbert 벡터 생성 (토큰당 하나의 벡터)
+            colbert_dim = 128  # ColBERT 임베딩 차원
+            mock_colbert = [[random.random() for _ in range(colbert_dim)] for _ in range(random.randint(10, 20))]
+            mock_colbert_vectors.append(mock_colbert)
+        
         embeddings: List[EmbeddingVector] = []
         for i, vector in enumerate(mock_embeddings_list):
             chunk_metadata_ref = chunks[i].metadata.copy()
-            embeddings.append(EmbeddingVector(vector=vector, metadata=chunk_metadata_ref))
-        logger.info(f"DummyEmbedderAdapter: Generated {len(embeddings)} mock embeddings.")
+            embeddings.append(EmbeddingVector(
+                vector=vector, 
+                metadata=chunk_metadata_ref,
+                sparse_vector=mock_sparse_vectors[i],
+                colbert_vecs=mock_colbert_vectors[i]
+            ))
+        logger.info(f"DummyEmbedderAdapter: Generated {len(embeddings)} mock embeddings with sparse vectors and colbert vectors.")
         return embeddings
 
 
@@ -103,6 +156,7 @@ class BgeM3EmbedderAdapter(EmbeddingGenerationPort):
         model_name: str = "BAAI/bge-m3", # BGEM3EmbeddingFunction에 전달될 모델 이름
         device: Optional[str] = None, # BGEM3EmbeddingFunction에 전달될 장치
         use_fp16: bool = False, # BGEM3EmbeddingFunction에 전달될 FP16 사용 여부
+        return_sparse: bool = True, # 스파스 벡터 반환 여부
         #api_key_port: Optional[ApiKeyManagementPort] = None, # BGEM3EmbeddingFunction은 토큰을 직접 받지 않는 것으로 추정
         # 기타 BGEM3EmbeddingFunction 초기화에 필요한 파라미터 추가 (pymilvus 문서 확인)
     ):
@@ -113,6 +167,7 @@ class BgeM3EmbedderAdapter(EmbeddingGenerationPort):
              model_name: BGEM3EmbeddingFunction에 전달될 모델 이름.
              device: BGEM3EmbeddingFunction에 전달될 장치 ('cpu', 'cuda', 'etc').
              use_fp16: BGEM3EmbeddingFunction에 전달될 FP16 사용 여부. CPU 사용 시 False 권장.
+             return_sparse: 스파스 벡터 반환 여부 (True/False)
              # 기타 BGEM3EmbeddingFunction 초기화 파라미터들 (pymilvus 문서 확인 필요)
         """
         logger.info(f"BgeM3EmbedderAdapter: Initializing for model '{model_name}' on device '{device or 'auto'}' with use_fp16={use_fp16}...")
@@ -120,6 +175,7 @@ class BgeM3EmbedderAdapter(EmbeddingGenerationPort):
         self._model_name = model_name
         self._device = device
         self._use_fp16 = use_fp16
+        self._return_sparse = return_sparse
         # self._api_key_port = api_key_port # API 키 포트는 여기서 직접 사용되지 않는 것으로 보임 (BGEM3EmbeddingFunction이 내부적으로 처리 추정)
 
         self._embedding_function: Optional[BGEM3EmbeddingFunction] = None
@@ -142,9 +198,11 @@ class BgeM3EmbedderAdapter(EmbeddingGenerationPort):
                      device=self._device,
                      use_fp16=self._use_fp16,
                      batch_size=16,  # 배치 사이즈 명시적 설정
-                     use_fast=True  # 빠른 이미지 프로세서 사용
+                     return_dense=True,  # dense 벡터 항상 반환
+                     return_sparse=self._return_sparse,  # sparse 벡터 반환 여부
+                     return_colbert_vecs=True  # colbert 벡터 사용
                  )
-                 logger.info("BgeM3EmbedderAdapter: BGEM3EmbeddingFunction instance created successfully.")
+                 logger.info(f"BgeM3EmbedderAdapter: BGEM3EmbeddingFunction instance created successfully with return_sparse={self._return_sparse}")
              except Exception as e: # BGEM3EmbeddingFunction 초기화 중 발생할 수 있는 예외 처리
                  logger.error(f"BgeM3EmbedderAdapter: Error initializing BGEM3EmbeddingFunction: {e}")
                  self._embedding_function = None # 초기화 실패 시 None
@@ -174,6 +232,8 @@ class BgeM3EmbedderAdapter(EmbeddingGenerationPort):
 
         # 2단계: 임베딩 벡터 생성 (실제 모델 또는 모의 벡터)
         embedding_vectors = []
+        sparse_vectors = []
+        colbert_vectors = []
 
         # self._embedding_function 인스턴스가 유효하면 실제 임베딩 실행
         if self._embedding_function is not None:
@@ -185,15 +245,115 @@ class BgeM3EmbedderAdapter(EmbeddingGenerationPort):
                     embedding_results_dict = self._embedding_function.encode_documents(chunk_contents)
                     # 딕셔너리에서 dense 임베딩 추출
                     embedding_vectors = embedding_results_dict["dense"]
-                    logger.info(f"   Successfully generated vectors using encode_documents method.")
+                    logger.info(f"   Successfully generated dense vectors using encode_documents method.")
+                    
+                    # 로그 추가: 반환된 임베딩 결과 딕셔너리의 키 목록 출력
+                    logger.info(f"   embed_documents returned keys: {list(embedding_results_dict.keys())}")
+                    
+                    # colbert_vecs 처리 (있는 경우)
+                    if "colbert_vecs" in embedding_results_dict:
+                        colbert_vectors = embedding_results_dict["colbert_vecs"]
+                        logger.info(f"   Successfully extracted ColBERT vectors with shape: {colbert_vectors[0].shape if hasattr(colbert_vectors[0], 'shape') else 'Unknown'}")
+                    else:
+                        # colbert_vecs가 없는 경우 None으로 채움
+                        colbert_vectors = [None] * len(embedding_vectors)
+                        logger.info("   No colbert_vecs found in embedding results")
+                    
+                    # sparse 벡터 처리를 위한 부분: sparse 키 먼저 확인, 없으면 lexical_weights 확인
+                    if self._return_sparse and "sparse" in embedding_results_dict:
+                        try:
+                            # sparse 키는 scipy.sparse.csr_array 형태로 반환
+                            sparse_matrices = embedding_results_dict["sparse"]
+                            logger.info(f"   Found sparse matrices in csr_array format")
+                            
+                            # sparse_matrices 타입 및 구조 정보 출력
+                            logger.info(f"   Sparse matrices type: {type(sparse_matrices)}")
+                            if hasattr(sparse_matrices, "shape"):
+                                logger.info(f"   Sparse matrices shape: {sparse_matrices.shape}")
+                            
+                            # csr_array 형식을 Dict[int, float]로 변환
+                            if hasattr(sparse_matrices, 'shape'):
+                                # 단일 행렬인 경우
+                                sparse_matrix = sparse_matrices
+                                logger.info(f"   Combined sparse matrix shape: {sparse_matrix.shape}")
+                                
+                                # 각 행(문서)에 대한 Dict[int, float] 생성
+                                for i in range(sparse_matrix.shape[0]):
+                                    row_indices = sparse_matrix.indices[sparse_matrix.indptr[i]:sparse_matrix.indptr[i+1]]
+                                    row_data = sparse_matrix.data[sparse_matrix.indptr[i]:sparse_matrix.indptr[i+1]]
+                                    # 키(인덱스)-값(가중치) 매핑
+                                    converted_dict = {int(idx): float(val) for idx, val in zip(row_indices, row_data)}
+                                    sparse_vectors.append(converted_dict)
+                            else:
+                                # 여러 행렬들인 경우 (리스트 형태)
+                                for i, sparse_matrix in enumerate(list(sparse_matrices)):
+                                    # 리스트 내 각 행렬의 비영 원소 정보 추출
+                                    row_indices = sparse_matrix.indices
+                                    row_data = sparse_matrix.data
+                                    # 키(인덱스)-값(가중치) 매핑
+                                    converted_dict = {int(idx): float(val) for idx, val in zip(row_indices, row_data)}
+                                    sparse_vectors.append(converted_dict)
+                            
+                            logger.info(f"   Successfully extracted {len(sparse_vectors)} sparse vectors from csr_array format.")
+                            if sparse_vectors and len(sparse_vectors) > 0 and sparse_vectors[0]:
+                                logger.info(f"   Sample sparse vector has {len(sparse_vectors[0])} non-zero elements")
+                                
+                        except Exception as sparse_extract_error:
+                            logger.warning(f"   Failed to extract sparse vectors from csr_array: {sparse_extract_error}")
+                            sparse_vectors = [None] * len(embedding_vectors)
+                    
+                    # lexical_weights 키에 있는 경우 (fallback)
+                    elif self._return_sparse and "lexical_weights" in embedding_results_dict:
+                        # lexical_weights는 List[Dict[str, float]] 형태
+                        lexical_weights = embedding_results_dict["lexical_weights"]
+                        
+                        # lexical_weights 데이터 샘플 출력
+                        if lexical_weights and len(lexical_weights) > 0:
+                            sample_weights = str(lexical_weights[0])[:100] + "..." if len(str(lexical_weights[0])) > 100 else str(lexical_weights[0])
+                            logger.info(f"   Sample lexical_weights data: {sample_weights}")
+                        
+                        # 각 문서에 대한 lexical_weights를 Dict[int, float] 형태로 변환
+                        for sparse_dict in lexical_weights:
+                            # str 키를 int로 변환
+                            converted_dict = {int(k): v for k, v in sparse_dict.items()}
+                            sparse_vectors.append(converted_dict)
+                        
+                        logger.info(f"   Successfully extracted {len(sparse_vectors)} sparse vectors from lexical_weights.")
+                    
+                    # 어떤 키도 없는 경우
+                    else:
+                        # sparse 벡터가 없는 경우 None으로 채움
+                        sparse_vectors = [None] * len(embedding_vectors)
+                        if self._return_sparse:
+                            import traceback
+                            logger.warning("   No sparse or lexical_weights field found in embedding results.\n" + traceback.format_stack()[-2])
+                
                 except (AttributeError, TypeError) as method_error:
                     # encode_documents가 없거나 예상치 못한 인자를 받는 경우
                     logger.warning(f"encode_documents 메서드를 사용할 수 없습니다: {method_error}. encode 메서드로 대체합니다.")
-                    # 대신 encode 메서드 시도
-                    embedding_vectors = self._embedding_function.encode(chunk_contents)
+                    # 대신 encode 메서드 시도 (sparse 벡터는 지원 안 될 수 있음)
+                    result = self._embedding_function.encode(chunk_contents)
+                    
+                    # 반환 유형이 딕셔너리인지 확인
+                    if isinstance(result, dict) and "dense" in result:
+                        embedding_vectors = result["dense"]
+                        
+                        # sparse 벡터 처리
+                        if self._return_sparse and "lexical_weights" in result:
+                            lexical_weights = result["lexical_weights"]
+                            for sparse_dict in lexical_weights:
+                                converted_dict = {int(k): v for k, v in sparse_dict.items()}
+                                sparse_vectors.append(converted_dict)
+                        else:
+                            sparse_vectors = [None] * len(embedding_vectors)
+                    else:
+                        # 단순히 벡터 리스트만 반환한 경우
+                        embedding_vectors = result
+                        sparse_vectors = [None] * len(embedding_vectors)
+                    
                     logger.info(f"   Successfully generated vectors using encode method instead.")
                 
-                logger.info(f"   Generated {len(embedding_vectors)} raw vectors.")
+                logger.info(f"   Generated {len(embedding_vectors)} dense vectors and {len(sparse_vectors)} sparse vectors.")
                 
                 # 생성된 벡터 수와 청크 수가 일치하는지 확인
                 if len(chunks) != len(embedding_vectors):
@@ -206,29 +366,72 @@ class BgeM3EmbedderAdapter(EmbeddingGenerationPort):
 
         else:
             # 모델이 없는 경우 모의 임베딩 생성
-            mock_dimension = 1024 # BGE-M3 차원 (1024로 추정)
+            mock_dimension = 1024  # BGE-M3 차원 (1024로 추정)
             embedding_vectors = [[random.random() for _ in range(mock_dimension)] for _ in chunks]
-            logger.info(f"   Generated {len(embedding_vectors)} mock vectors.")
+            
+            # 모의 sparse 벡터 생성
+            sparse_dim = 30522  # 가상의 토크나이저 크기
+            sparse_vectors = []
+            colbert_vectors = []
+            
+            for _ in range(len(chunks)):
+                if self._return_sparse:
+                    # 각 문서마다 5-15개의 랜덤 토큰 인덱스 생성
+                    num_tokens = random.randint(5, 15)
+                    indices = random.sample(range(sparse_dim), num_tokens)
+                    # 각 인덱스에 랜덤 가중치 할당
+                    mock_sparse = {idx: random.random() for idx in indices}
+                    sparse_vectors.append(mock_sparse)
+                else:
+                    sparse_vectors.append(None)
+                
+                # 모의 colbert 벡터 생성 (토큰당 하나의 벡터)
+                colbert_dim = 128  # ColBERT 임베딩 차원
+                mock_colbert = [[random.random() for _ in range(colbert_dim)] for _ in range(random.randint(10, 20))]
+                colbert_vectors.append(mock_colbert)
+                    
+            logger.info(f"   Generated {len(embedding_vectors)} mock dense vectors, {len(sparse_vectors)} sparse vectors, and {len(colbert_vectors)} colbert vectors.")
 
         # 3단계: 생성된 벡터를 EmbeddingVector 도메인 모델로 변환
         try:
             logger.info("   Mapping vectors to EmbeddingVector domain models...")
             result = []
-            for i, vector in enumerate(embedding_vectors):
+            for i, (vector, sparse_vector) in enumerate(zip(embedding_vectors, sparse_vectors)):
                 if i < len(chunks):
-                    result.append(EmbeddingVector(
-                        vector=vector,
-                        metadata=chunks[i].metadata.copy()
-                    ))
+                    try:
+                        # sparse_vector가 있는 경우만 인자에 포함
+                        if sparse_vector is not None:
+                            result.append(EmbeddingVector(
+                                vector=vector,
+                                metadata=chunks[i].metadata.copy(),
+                                sparse_vector=sparse_vector,
+                                colbert_vecs=colbert_vectors[i] if i < len(colbert_vectors) and colbert_vectors[i] is not None else None
+                            ))
+                        else:
+                            # sparse_vector가 없는 경우는 제외
+                            result.append(EmbeddingVector(
+                                vector=vector,
+                                metadata=chunks[i].metadata.copy(),
+                                colbert_vecs=colbert_vectors[i] if i < len(colbert_vectors) and colbert_vectors[i] is not None else None
+                            ))
+                    except TypeError as e:
+                        # sparse_vector 매개변수가 지원되지 않는 경우 fallback
+                        logger.warning(f"EmbeddingVector creation with sparse_vector and colbert_vecs failed, using dense only: {e}")
+                        result.append(EmbeddingVector(
+                            vector=vector,
+                            metadata=chunks[i].metadata.copy()
+                        ))
             
             logger.info(f"BgeM3EmbedderAdapter: Created {len(result)} EmbeddingVector objects.")
             logger.info(f"[EMBEDDING] 성공: {len(result)}개 임베딩 벡터 생성")
             if result:
                 logger.info(f"  첫 임베딩 벡터 차원: {len(result[0].vector)}")
+                if hasattr(result[0], 'sparse_vector') and result[0].sparse_vector:
+                    logger.info(f"  첫 스파스 벡터 비영(non-zero) 요소 수: {len(result[0].sparse_vector)}")
             
             return result
             
         except Exception as e:
-            error_msg = f"Error during embedding mapping - {e}"
+            error_msg = f"Error during embedding mapping a- {e}"
             logger.error(error_msg)
             raise EmbeddingError(error_msg)

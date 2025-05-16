@@ -124,6 +124,59 @@ def setup_api_routes(input_port: DocumentProcessingInputPort) -> APIRouter:
                 detail=f"Failed to process document due to an internal error: {e}" # 오류 상세 메시지 (디버깅용 또는 사용자용)
             )
 
+    @router.post(
+        "/upload_document", 
+        response_model=List[DocumentChunk],
+        status_code=status.HTTP_201_CREATED,
+        tags=["문서 업로드"]
+    )
+    async def upload_document(
+        background_tasks: BackgroundTasks, 
+        file: UploadFile = File(...)
+    ):
+        """
+        문서 파일을 업로드하여 처리 시스템으로 전달합니다.
+        """
+        logger.info(f"[API] 업로드 엔드포인트 호출 시작: 파일명 = {file.filename}")
+        if not file.filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="파일이 업로드되지 않았습니다"
+            )
+
+        try:
+            # 파일 내용 읽기
+            content = await file.read()
+            
+            # RawDocument 생성
+            raw_document = RawDocument(
+                content=content,
+                metadata={
+                    "filename": file.filename,
+                    "content_type": file.content_type,
+                    "size": len(content)
+                }
+            )
+            
+            # 문서 처리 유스케이스 실행
+            processed_result = input_port.execute(raw_document)
+            
+            # 결과 반환
+            if isinstance(processed_result, list):
+                return processed_result
+            elif hasattr(processed_result, 'metadata'):
+                return [processed_result]
+            else:
+                logger.warning("유스케이스에서 알 수 없는 결과 유형이 반환되어 빈 목록을 반환합니다")
+                return []
+                
+        except Exception as e:
+            logger.error(f"문서 업로드 중 오류 발생: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"내부 오류로 인해 문서 처리에 실패했습니다: {e}"
+            )
+
     # 설정이 완료된 APIRouter 인스턴스를 반환하여 main.py에서 FastAPI 앱에 포함시킬 수 있도록 합니다.
     return router
 
@@ -162,16 +215,3 @@ def setup_api_routes(input_port: DocumentProcessingInputPort) -> APIRouter:
 #
 # # --- 5. 앱 실행 (uvicorn 등 사용) ---
 # # 예: uvicorn main:app --reload
-
-@router.post("/upload_document", tags=["문서 업로드"])
-async def upload_document(
-    background_tasks: BackgroundTasks, 
-    file: UploadFile = File(...)
-):
-    """
-    문서 파일을 업로드하여 처리 시스템으로 전달합니다.
-    """
-    logger.info(f"[API] 엔드포인트 호출 시작: 파일명 = {file.filename}")
-    
-    # 파일 확장자 검증 등의 로직 추가 가능
-    # ...

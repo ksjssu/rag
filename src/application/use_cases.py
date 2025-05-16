@@ -22,7 +22,7 @@ from ..ports.output_ports import ( # <-- 상대 경로 임포트 수정 (..ports
     DocumentParsingPort,
     TextChunkingPort,
     EmbeddingGenerationPort,
-    ApiKeyManagementPort,
+    #ApiKeyManagementPort,
     VectorDatabasePort,
     # 필요한 다른 저장소 포트가 있다면 여기에 추가
 )
@@ -37,7 +37,7 @@ class IngestDocumentUseCase(DocumentProcessingInputPort):
         chunking_port: TextChunkingPort,       # 청킹 기능 제공 포트
         embedding_port: EmbeddingGenerationPort, # 임베딩 기능 제공 포트
         persistence_port: VectorDatabasePort, # <-- VectorDatabasePort 의존성 추가
-        api_key_port: Optional[ApiKeyManagementPort] = None # 필요하다면 API 키 관리 포트 (None 허용)
+      #  api_key_port: Optional[ApiKeyManagementPort] = None # 필요하다면 API 키 관리 포트 (None 허용)
     ):
         """
         IngestDocumentUseCase 초기화 및 필요한 출력 포트 구현체들을 주입받습니다.
@@ -53,7 +53,7 @@ class IngestDocumentUseCase(DocumentProcessingInputPort):
         self._chunking_port: TextChunkingPort = chunking_port
         self._embedding_port: EmbeddingGenerationPort = embedding_port
         self._persistence_port: VectorDatabasePort = persistence_port # <-- 주입받은 저장소 포트 저장
-        self._api_key_port: Optional[ApiKeyManagementPort] = api_key_port
+        # self._api_key_port: Optional[ApiKeyManagementPort] = api_key_port
         logger.info("IngestDocumentUseCase initialized with parser, chunking, embedding, and persistence ports.")
 
     # DocumentProcessingInputPort 인터페이스의 execute 메서드를 구현합니다.

@@ -21,8 +21,8 @@ from docling.datamodel.pipeline_options import (
     #granite_picture_description - 픽처 디스크립션 모드
 )
 
-# 로거 설정 제거하고 config에서 가져오기
-from src.config import logger
+# config에서 설정 및 로거 가져오기
+from src.config import logger, settings
 
 # --- 프라이머리 어댑터 설정 함수 임포트 ---
 from src.adapters.primary.api_adapter import setup_api_routes
@@ -34,7 +34,7 @@ from src.application.use_cases import IngestDocumentUseCase
 from src.adapters.secondary.docling_parser_adapter import DoclingParserAdapter
 from src.adapters.secondary.docling_chunker_adapter import DoclingChunkerAdapter
 from src.adapters.secondary.bge_m3_embedder_adapter import BgeM3EmbedderAdapter
-from src.adapters.secondary.env_apikey_adapter import EnvApiKeyAdapter
+#from src.adapters.secondary.env_apikey_adapter import EnvApiKeyAdapter
 from src.adapters.secondary.milvus_adapter import MilvusAdapter, _milvus_library_available
 
 # --- 더미 어댑터 클래스 정의 ---
@@ -61,24 +61,7 @@ class DummyMilvusAdapter:
         logger.warning("DummyMilvusAdapter: save_document_data called, but no action taken")
         return {"status": "dummy", "message": "Data not persisted in vector database"}
 
-# --- 애플리케이션 설정 로드 ---
-# 환경 변수에서 설정을 로드하거나 기본값을 사용합니다.
-MILVUS_HOST: str = os.getenv("MILVUS_HOST", "10.10.30.80")
-MILVUS_PORT: int = int(os.getenv("MILVUS_PORT", 30953))
-MILVUS_COLLECTION: str = os.getenv("MILVUS_COLLECTION", "test_250515")
-MILVUS_USER: Optional[str] = os.getenv("MILVUS_USER", "root")
-MILVUS_PASSWORD: Optional[str] = os.getenv("MILVUS_PASSWORD", "smr0701!")
-
-# Docling 설정
-DOCLING_ALLOWED_FORMATS: List[str] = os.getenv("DOCLING_ALLOWED_FORMATS", "pdf,docx,xlsx,pptx,jpg,png").split(',')
-
-# 청킹 설정
-DEFAULT_CHUNK_SIZE: int = int(os.getenv("DEFAULT_CHUNK_SIZE", 2000))
-DEFAULT_CHUNK_OVERLAP: int = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))
-
-# 임베딩 모델 설정
-EMBEDDING_MODEL_NAME: str = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
-EMBEDDING_DEVICE: str = os.getenv("EMBEDDING_DEVICE", "cpu")
+# --- 하드코딩된 설정값 제거하고 settings에서 값을 가져오도록 수정 ---
 
 def create_app() -> FastAPI:
     """
@@ -89,15 +72,15 @@ def create_app() -> FastAPI:
     logger.info("--- Starting Application Assembly ---")
 
     # API 키 관리 어댑터
-    apikey_adapter = EnvApiKeyAdapter()
-    logger.info("- Created EnvApiKeyAdapter instance.")
+    #apikey_adapter = EnvApiKeyAdapter()
+    #logger.info("- Created EnvApiKeyAdapter instance.")
 
     # OCR 옵션 및 파이프라인 옵션 제거, 테이블/텍스트 추출만 활성화 (이미지 설명 완전 비활성화)
     pdf_options = PdfPipelineOptions(
-        do_ocr=False,  # OCR 비활성화
-        do_table_structure=True,  # 테이블 구조 추출 활성화
-        images_scale=2.0,  # 이미지 크기 조정
-        generate_picture_images=True  # 이미지 생성 활성화
+        do_ocr=settings.DO_OCR,  # OCR 설정
+        do_table_structure=settings.DO_TABLE_STRUCTURE,  # 테이블 구조 추출 설정
+        images_scale=settings.IMAGES_SCALE,  # 이미지 크기 조정
+        generate_picture_images=settings.GENERATE_PICTURE_IMAGES  # 이미지 생성 설정
     )
     
     # 파이프라인 옵션 로깅 (이미지 설명 관련 부분 제거)
@@ -106,7 +89,7 @@ def create_app() -> FastAPI:
     # 파서 어댑터 생성
     try:
         parser_adapter = DoclingParserAdapter(
-            allowed_formats=DOCLING_ALLOWED_FORMATS,
+            allowed_formats=settings.DOCLING_ALLOWED_FORMATS.split(','),
             use_gpt_picture_description=False  # OpenAI 모델 사용하지 않음
         )
         # DoclingParserAdapter 내부 파이프라인 옵션도 명시적으로 비활성화
@@ -123,8 +106,8 @@ def create_app() -> FastAPI:
     # 청킹 어댑터 생성
     try:
         chunker_adapter = DoclingChunkerAdapter(
-            chunk_size=DEFAULT_CHUNK_SIZE, 
-            chunk_overlap=DEFAULT_CHUNK_OVERLAP
+            chunk_size=settings.CHUNK_SIZE, 
+            chunk_overlap=settings.CHUNK_OVERLAP
         )
         logger.info("- Created DoclingChunkerAdapter instance.")
     except Exception as e:
@@ -135,8 +118,8 @@ def create_app() -> FastAPI:
     # 임베딩 어댑터 생성
     try:
         embedder_adapter = BgeM3EmbedderAdapter(
-            model_name=EMBEDDING_MODEL_NAME,
-            device=EMBEDDING_DEVICE
+            model_name=settings.EMBEDDING_MODEL_NAME,
+            device=settings.EMBEDDING_DEVICE
         )
         logger.info("- Created BgeM3EmbedderAdapter instance.")
     except Exception as e:
@@ -155,14 +138,14 @@ def create_app() -> FastAPI:
         else:
             # 인증 정보 구성
             token = None
-            if MILVUS_USER and MILVUS_PASSWORD:
-                token = f"{MILVUS_USER}:{MILVUS_PASSWORD}"
+            if settings.MILVUS_USER and settings.MILVUS_PASSWORD:
+                token = f"{settings.MILVUS_USER}:{settings.MILVUS_PASSWORD}"
                 
             # MilvusAdapter 인스턴스 생성 시도
             persistence_adapter = MilvusAdapter(
-                host=MILVUS_HOST,
-                port=MILVUS_PORT,
-                collection_name=MILVUS_COLLECTION,
+                host=settings.MILVUS_HOST,
+                port=settings.MILVUS_PORT,
+                collection_name=settings.MILVUS_COLLECTION,
                 token=token
             )
             logger.info("- Created MilvusAdapter instance and successfully connected.")
@@ -179,7 +162,7 @@ def create_app() -> FastAPI:
             chunking_port=chunker_adapter,
             embedding_port=embedder_adapter,
             persistence_port=persistence_adapter,
-            api_key_port=apikey_adapter
+        #    api_key_port=apikey_adapter
         )
         logger.info("- Created IngestDocumentUseCase instance and injected dependencies.")
     except Exception as e:
@@ -258,10 +241,10 @@ if __name__ == "__main__":
     # 파일 변경 감시 설정을 조정하여 메모리 오류 방지
     uvicorn.run(
         app, 
-        host="0.0.0.0", 
-        port=8000, 
+        host=settings.API_HOST, 
+        port=settings.API_PORT, 
         use_colors=True,
-        limit_max_requests=100,  # 메모리 누수 방지를 위한 최대 요청 수 제한
-        reload=False  # 혹은 reload_dirs를 직접 지정하여 감시할 디렉토리 제한
+        limit_max_requests=settings.API_LIMIT_MAX_REQUESTS,  # 메모리 누수 방지를 위한 최대 요청 수 제한
+        reload=settings.API_RELOAD  # 혹은 reload_dirs를 직접 지정하여 감시할 디렉토리 제한
     )
 

@@ -63,24 +63,24 @@ class EmbeddingGenerationPort(ABC):
         """
         pass
 
-class ApiKeyManagementPort(ABC):
-    """
-    애플리케이션 코어(유스케이스 또는 다른 서비스)가 외부 서비스 사용에 필요한 API 키 등을
-    가져오기 위해 사용하는 출력 포트. 이 포트는 환경 변수 어댑터 등에 의해 구현됩니다.
-    """
-    @abstractmethod
-    def get_api_key(self, service_name: str) -> str:
-        """
-        주어진 서비스 이름에 해당하는 API 키를 조회합니다.
+# class ApiKeyManagementPort(ABC):
+#     """
+#     애플리케이션 코어(유스케이스 또는 다른 서비스)가 외부 서비스 사용에 필요한 API 키 등을
+#     가져오기 위해 사용하는 출력 포트. 이 포트는 환경 변수 어댑터 등에 의해 구현됩니다.
+#     """
+#     @abstractmethod
+#     def get_api_key(self, service_name: str) -> str:
+#         """
+#         주어진 서비스 이름에 해당하는 API 키를 조회합니다.
 
-        Args:
-            service_name: API 키가 필요한 외부 서비스의 이름 (예: "OPENAI", "DO CLING", "BGE_M3").
+#         Args:
+#             service_name: API 키가 필요한 외부 서비스의 이름 (예: "OPENAI", "DO CLING", "BGE_M3").
 
-        Returns:
-            해당 서비스의 API 키 문자열.
-            키가 없을 경우 예외를 발생시키거나 적절한 오류 처리를 구현체에서 수행합니다.
-        """
-        pass
+#         Returns:
+#             해당 서비스의 API 키 문자열.
+#             키가 없을 경우 예외를 발생시키거나 적절한 오류 처리를 구현체에서 수행합니다.
+#         """
+#         pass
     
     
 class VectorDatabasePort(ABC):

@@ -1665,7 +1665,7 @@ def extract_images_from_file(file_bytes, file_extension, filename):
             logger.info(f"[이미지 추출] PPTX에서 {len(extracted_images)}개 이미지 추출됨")
             
         # 4. XLSX 파일 처리
-        elif file_extension.lower() in ['xlsx', 'xls']:
+        elif file_extension.lower() in ['xlsx', 'xls', 'csv']:
             import io
             import openpyxl
             from PIL import Image

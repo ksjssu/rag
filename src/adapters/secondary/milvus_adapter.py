@@ -203,6 +203,8 @@ class MilvusAdapter(VectorDatabasePort):
                 FieldSchema(name="content", dtype=DataType.VARCHAR, max_length=65535),
                 FieldSchema(name="sparse_vector", dtype=DataType.VARCHAR, max_length=65535),
                 FieldSchema(name="sparse_model", dtype=DataType.VARCHAR, max_length=64),
+                FieldSchema(name="colbert_vecs", dtype=DataType.VARCHAR, max_length=65535),
+                FieldSchema(name="colbert_model", dtype=DataType.VARCHAR, max_length=64),
                 FieldSchema(name="dense_vector", dtype=DataType.FLOAT_VECTOR, dim=vector_dimension),
                 FieldSchema(name="dense_model", dtype=DataType.VARCHAR, max_length=64),
                 FieldSchema(name="created_at", dtype=DataType.VARCHAR, max_length=64),
@@ -417,13 +419,63 @@ class MilvusAdapter(VectorDatabasePort):
                     "group_list": metadata_copy.get('group_list', ''),
                     "metadata": metadata_str,
                     "content": chunk.content,
-                    "sparse_vector": json.dumps([0.0] * 100),  # 빈 sparse 벡터
-                    "sparse_model": "none",
+                }
+                
+                # sparse_vector 처리 및 로깅
+                sparse_vector_data = getattr(embedding, 'sparse_vector', {})
+                # NumPy 배열을 직접 if 조건으로 사용할 때 발생하는 오류 방지
+                has_sparse_vector = sparse_vector_data is not None and (
+                    (isinstance(sparse_vector_data, dict) and len(sparse_vector_data) > 0) or
+                    (hasattr(sparse_vector_data, 'size') and sparse_vector_data.size > 0)
+                )
+                
+                if has_sparse_vector:
+                    # NumPy 구조를 JSON으로 직렬화하기 위해 표준 Python 타입으로 변환
+                    if hasattr(sparse_vector_data, 'tolist'):
+                        sparse_vector_dict = sparse_vector_data.tolist()
+                    elif hasattr(sparse_vector_data, 'to_dict'):
+                        sparse_vector_dict = sparse_vector_data.to_dict()
+                    else:
+                        sparse_vector_dict = sparse_vector_data
+                        
+                    sparse_vector_sample = str(sparse_vector_dict)[:100] + "..." if len(str(sparse_vector_dict)) > 100 else str(sparse_vector_dict)
+                    logger.info(f"  청크 {chunk_index}의 sparse_vector 샘플: {sparse_vector_sample}")
+                    record["sparse_vector"] = json.dumps(sparse_vector_dict, cls=CustomJSONEncoder)
+                    record["sparse_model"] = "bge-m3-sparse"
+                else:
+                    logger.warning(f"  청크 {chunk_index}에 sparse_vector가 없거나 비어 있습니다")
+                    record["sparse_vector"] = json.dumps({})
+                    record["sparse_model"] = "none"
+                
+                # colbert_vecs 처리 및 로깅
+                colbert_vecs_data = getattr(embedding, 'colbert_vecs', None)
+                # NumPy 배열을 직접 if 조건으로 사용할 때 발생하는 오류 방지
+                has_colbert_vecs = colbert_vecs_data is not None and len(colbert_vecs_data) > 0
+                
+                if has_colbert_vecs:
+                    # NumPy 배열을 JSON으로 직렬화하기 위해 표준 Python 타입으로 변환
+                    if hasattr(colbert_vecs_data, 'tolist'):
+                        colbert_vecs_list = colbert_vecs_data.tolist()
+                    else:
+                        colbert_vecs_list = colbert_vecs_data
+                        
+                    # 첫 몇 개 벡터만 로그에 출력
+                    colbert_sample = str(colbert_vecs_list[:2])[:100] + "..." if len(str(colbert_vecs_list[:2])) > 100 else str(colbert_vecs_list[:2])
+                    logger.info(f"  청크 {chunk_index}의 colbert_vecs 샘플 (토큰 수: {len(colbert_vecs_list)}): {colbert_sample}")
+                    record["colbert_vecs"] = json.dumps(colbert_vecs_list, cls=CustomJSONEncoder)
+                    record["colbert_model"] = "bge-m3-colbert"
+                else:
+                    logger.warning(f"  청크 {chunk_index}에 colbert_vecs가 없거나 비어 있습니다")
+                    record["colbert_vecs"] = json.dumps([])
+                    record["colbert_model"] = "none"
+                
+                # 나머지 필드 추가
+                record.update({
                     "dense_vector": dense_vector,
                     "dense_model": "bge-m3",
                     "created_at": current_time,
                     "updated_at": current_time,
-                }
+                })
                 
                 records.append(record)
             
@@ -431,13 +483,13 @@ class MilvusAdapter(VectorDatabasePort):
             collection = Collection(self._collection_name)
             
             # 데이터 삽입
-            logger.info(f"[STORAGE] Milvus에 {len(records)}개 레코드 삽입 시도 중...")
-            result = collection.insert(records)
-            
-            # 변경사항 즉시 기록
-            collection.flush()
-            
-            logger.info(f"[STORAGE] 성공: Milvus 응답 = {result}")
+            BATCH_SIZE = 5  # 한 번에 insert할 레코드 수
+            for batch_start in range(0, len(records), BATCH_SIZE):
+                batch = records[batch_start:batch_start+BATCH_SIZE]
+                logger.info(f"[STORAGE] Milvus에 {len(batch)}개 레코드 배치 삽입 시도 중...")
+                result = collection.insert(batch)
+                collection.flush()
+                logger.info(f"[STORAGE] 배치 성공: Milvus 응답 = {result}")
             
         except Exception as e:
             error_msg = f"[STORAGE] 데이터 저장 실패: {e}"
@@ -453,8 +505,19 @@ class MilvusAdapter(VectorDatabasePort):
 # JSON 직렬화 가능한 커스텀 인코더 클래스 생성
 class CustomJSONEncoder(json.JSONEncoder):
     def default(self, obj):
+        # NumPy 배열, 행렬 등 처리
+        try:
+            if hasattr(obj, 'tolist'):
+                return obj.tolist()
+            elif hasattr(obj, 'item'):
+                return obj.item()
+            elif hasattr(obj, 'to_dict'):
+                return obj.to_dict()
+        except Exception:
+            pass
+            
         # TableData 및 기타 직렬화 불가능한 객체 처리
         try:
             return str(obj)
-        except:
+        except Exception:
             return f"[Object of type {type(obj).__name__}]"

@@ -1,6 +1,6 @@
 # src/domain/models.py
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
 # RawDocument: 시스템에 처음 입력되는 원본 문서 데이터
@@ -36,5 +36,7 @@ class EmbeddingVector:
     """
     문서 청크의 임베딩 벡터 표현과 관련 메타데이터를 나타내는 도메인 모델.
     """
-    vector: List[float] # 임베딩 벡터 값 리스트
+    vector: List[float] # 임베딩 벡터 값 리스트 (dense vector)
     metadata: Dict[str, Any] = field(default_factory=dict) # 해당 임베딩이 파생된 청크 정보 등
+    sparse_vector: Optional[Dict[int, float]] = None # BGE-M3의 스파스 벡터 (indices와 values 정보)
+    colbert_vecs: Optional[List[List[float]]] = None # BGE-M3의 ColBERT 벡터

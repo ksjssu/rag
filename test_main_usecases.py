@@ -12,7 +12,7 @@ from docling.datamodel.pipeline_options import PdfPipelineOptions # granite_pict
 # 환경 변수/설정
 MILVUS_HOST = os.getenv("MILVUS_HOST", "localhost")
 MILVUS_PORT = int(os.getenv("MILVUS_PORT", 30953))
-MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "test_250430_1024_hybrid")
+MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "korean_pdf_files_test")
 MILVUS_USER = os.getenv("MILVUS_USER", "root")
 MILVUS_PASSWORD = os.getenv("MILVUS_PASSWORD", "smr0701!")
 DOCLING_ALLOWED_FORMATS = os.getenv("DOCLING_ALLOWED_FORMATS", "pdf,docx,xlsx,pptx,jpg,png").split(',')

@@ -7,6 +7,9 @@ import re
 # Configure logging
 logger = logging.getLogger(__name__)
 
+# config 불러오기 - 설정 참조를 위해 추가
+from src.config import settings
+
 # --- Docling 라이브러리 임포트 ---
 # src/adapters/secondary/docling_chunker_adapter.py
 
@@ -101,9 +104,9 @@ class DoclingChunkerAdapter(TextChunkingPort):
         merge_peers: bool = True,
         # 기타 HybridChunker 초기화 파라미터가 있다면 여기에 추가
 
-        # --- 폴백 청킹 설정 파라미터 이름을 main.py 호출과 일치하도록 수정 ---
-        chunk_size: int = 3000,  # <-- 청크 사이즈를 1000에서 3000으로 증가
-        chunk_overlap: int = 300,  # <-- 오버랩도 약간 증가
+        # 기본값을 config.py의 설정값과 일치시킴
+        chunk_size: int = None,  # 기본값을 None으로 설정하여 settings에서 가져오도록 함
+        chunk_overlap: int = None,  # 기본값을 None으로 설정하여 settings에서 가져오도록 함
     ):
         """
         DoclingChunkerAdapter 초기화. Docling HybridChunker 인스턴스를 생성하거나 폴백 설정을 가집니다.
@@ -113,9 +116,15 @@ class DoclingChunkerAdapter(TextChunkingPort):
             max_tokens: Docling HybridChunker의 최대 토큰 수 설정.
             merge_peers: Docling HybridChunker의 merge_peers 설정.
             # 기타 Docling HybridChunker 초기화 파라미터들 (Docling 문서 확인 필요)
-            chunk_size: Docling Chunker 또는 폴백 청킹 크기. # <-- Docstring 업데이트
-            chunk_overlap: Docling Chunker 또는 폴백 청킹 오버랩. # <-- Docstring 업데이트
+            chunk_size: Docling Chunker 또는 폴백 청킹 크기. 기본값은 settings.CHUNK_SIZE
+            chunk_overlap: Docling Chunker 또는 폴백 청킹 오버랩. 기본값은 settings.CHUNK_OVERLAP
         """
+        # config에서 기본값 가져오기
+        if chunk_size is None:
+            chunk_size = settings.CHUNK_SIZE
+        if chunk_overlap is None:
+            chunk_overlap = settings.CHUNK_OVERLAP
+
         if chunk_overlap >= chunk_size:
             raise ValueError("Chunk overlap must be less than chunk size.")
 
@@ -123,6 +132,9 @@ class DoclingChunkerAdapter(TextChunkingPort):
         # --- 인스턴스 변수 이름도 통일 ---
         self._chunk_size = chunk_size  # <-- 인스턴스 변수 이름도 _chunk_size로 변경
         self._chunk_overlap = chunk_overlap  # <-- 인스턴스 변수 이름도 _chunk_overlap로 변경
+
+        # settings 객체 유지
+        self._settings = settings
 
         # Docling HybridChunker 초기화에 필요한 파라미터들을 저장
         self._chunker_init_params: Dict[str, Any] = {
@@ -720,3 +732,33 @@ class DoclingChunkerAdapter(TextChunkingPort):
                 logger.info(f"청크에 제목 추가됨: {heading_text}")
                 
         return chunk_content
+
+    # 청크 크기와 오버랩 가져오기 메서드 - 설정 파일에서 최신 값을 읽거나 인스턴스 값 반환
+    def get_chunk_size(self) -> int:
+        """현재 청크 크기 반환 (settings 업데이트 고려)"""
+        # 런타임에 config 변경사항 반영을 원한다면 이 부분을 수정
+        # return self._settings.CHUNK_SIZE  # 항상 최신 설정값 사용
+        return self._chunk_size  # 인스턴스 생성 시 설정된 값 사용
+        
+    def get_chunk_overlap(self) -> int:
+        """현재 청크 오버랩 크기 반환 (settings 업데이트 고려)"""
+        # 런타임에 config 변경사항 반영을 원한다면 이 부분을 수정
+        # return self._settings.CHUNK_OVERLAP  # 항상 최신 설정값 사용
+        return self._chunk_overlap  # 인스턴스 생성 시 설정된 값 사용
+
+    # 청크 크기와 오버랩 설정 메서드
+    def set_chunk_size(self, size: int) -> None:
+        """청크 크기 설정"""
+        if size <= 0:
+            raise ValueError("Chunk size must be positive")
+        self._chunk_size = size
+        logger.info(f"청크 크기가 {size}(으)로 변경되었습니다.")
+        
+    def set_chunk_overlap(self, overlap: int) -> None:
+        """청크 오버랩 크기 설정"""
+        if overlap < 0:
+            raise ValueError("Chunk overlap must be non-negative")
+        if overlap >= self._chunk_size:
+            raise ValueError("Chunk overlap must be less than chunk size")
+        self._chunk_overlap = overlap
+        logger.info(f"청크 오버랩이 {overlap}(으)로 변경되었습니다.")
