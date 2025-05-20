@@ -1,0 +1,1 @@
+![Image](test-with-image-refs_artifacts\image_000000_e50048cedae7f5233ce2d9488532c4b265f417bd31b8cd1c39e261169e3e08bf.png)

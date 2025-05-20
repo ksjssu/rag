@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # Milvus 설정
     MILVUS_HOST: str = "10.10.30.80"
     MILVUS_PORT: int = 30953
-    MILVUS_COLLECTION: str = "colbert_test"
+    MILVUS_COLLECTION: str = "test_250520_normal"
     MILVUS_USER: Optional[str] = "root"
     MILVUS_PASSWORD: Optional[str] = "smr0701!"
     

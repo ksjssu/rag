@@ -49,6 +49,7 @@ except ImportError:
              self.token = token # 토큰 저장
              self.user = user # 유저 저장
              self.password = password # 비번 저장
+             self.logger = logger
 
         def is_connected(self): return self._is_connected
         # insert 메서드 시뮬레이션 (제공된 코드는 insert를 사용)
@@ -162,6 +163,8 @@ class MilvusAdapter(VectorDatabasePort):
         self._token = token
         self._collection_name = collection_name
         self._client = None  # Milvus 클라이언트 인스턴스
+        self.logger = logger  # logger 속성 추가
+        self._RETRY_DELAY_SECONDS = 1  # 재시도 지연 시간 추가
 
         try:
             # Milvus 클라이언트 인스턴스 생성
@@ -195,16 +198,14 @@ class MilvusAdapter(VectorDatabasePort):
             # 필드 정의
             fields = [
                 FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
-                FieldSchema(name="user_id", dtype=DataType.VARCHAR, max_length=64),
-                FieldSchema(name="document_id", dtype=DataType.VARCHAR, max_length=64),
+                FieldSchema(name="user_id", dtype=DataType.VARCHAR, max_length=100),
+                FieldSchema(name="document_id", dtype=DataType.VARCHAR, max_length=65535),
                 FieldSchema(name="chunk_index", dtype=DataType.INT64),
                 FieldSchema(name="group_list", dtype=DataType.VARCHAR, max_length=65535),
                 FieldSchema(name="metadata", dtype=DataType.VARCHAR, max_length=65535),
                 FieldSchema(name="content", dtype=DataType.VARCHAR, max_length=65535),
-                FieldSchema(name="sparse_vector", dtype=DataType.VARCHAR, max_length=65535),
+                FieldSchema(name="sparse_vector", dtype=DataType.SPARSE_FLOAT_VECTOR),
                 FieldSchema(name="sparse_model", dtype=DataType.VARCHAR, max_length=64),
-                FieldSchema(name="colbert_vecs", dtype=DataType.VARCHAR, max_length=65535),
-                FieldSchema(name="colbert_model", dtype=DataType.VARCHAR, max_length=64),
                 FieldSchema(name="dense_vector", dtype=DataType.FLOAT_VECTOR, dim=vector_dimension),
                 FieldSchema(name="dense_model", dtype=DataType.VARCHAR, max_length=64),
                 FieldSchema(name="created_at", dtype=DataType.VARCHAR, max_length=64),
@@ -217,24 +218,55 @@ class MilvusAdapter(VectorDatabasePort):
             # 컬렉션 생성
             collection = Collection(name=self._collection_name, schema=schema)
             
+            # 인덱스 이름 정의
+            dense_index_name = "dense_index"
+            sparse_index_name = "sparse_index"
+
             # 인덱스 생성 (dense_vector 필드에 대한 IVF_FLAT 인덱스)
-            index_params = {
+            index_params_dense_vector = {
                 "metric_type": "L2",
                 "index_type": "IVF_FLAT",
                 "params": {"nlist": 128}
             }
             
+            index_params_sparse_vector = {
+                "index_type": "SPARSE_INVERTED_INDEX", 
+                "metric_type": "IP" # Sparse 벡터에는 IP (Inner Product) 사용
+            }
+            
+            self.logger.info(f"Creating dense index '{dense_index_name}' on field 'dense_vector'...")
             collection.create_index(
                 field_name="dense_vector",
-                index_params=index_params
+                index_params=index_params_dense_vector,
+                index_name=dense_index_name # 인덱스 이름 명시
             )
             
-            # 인덱스 생성 대기
-            while not collection.has_index():
-                logger.info("인덱스 생성 대기 중...")
-                sleep(1)  # 1초 대기
+            self.logger.info(f"Creating sparse index '{sparse_index_name}' on field 'sparse_vector'...")
+            collection.create_index(
+                field_name="sparse_vector",
+                index_params=index_params_sparse_vector,
+                index_name=sparse_index_name # 인덱스 이름 명시
+            )
             
-            logger.info(f"[STORAGE] '{self._collection_name}' 컬렉션 생성 완료")
+            # --- 인덱스 생성 완료 대기 ---
+            self.logger.info(f"Waiting for index creation in collection '{self._collection_name}'...")
+            
+            # Dense 벡터 인덱스 확인
+            if dense_index_name:
+                while not collection.has_index(index_name=dense_index_name): # dense_index_name 명시
+                    self.logger.info(f"  Waiting for dense vector index '{dense_index_name}' to be created...")
+                    time.sleep(self._RETRY_DELAY_SECONDS)
+                self.logger.info(f"  Dense vector index '{dense_index_name}' created successfully.")
+
+            # Sparse 벡터 인덱스 확인
+            if sparse_index_name:
+                while not collection.has_index(index_name=sparse_index_name): # sparse_index_name 명시
+                    self.logger.info(f"  Waiting for sparse vector index '{sparse_index_name}' to be created...")
+                    time.sleep(self._RETRY_DELAY_SECONDS)
+                self.logger.info(f"  Sparse vector index '{sparse_index_name}' created successfully.")
+            
+            self.logger.info(f"All specified indexes created for collection '{self._collection_name}'.")
+            
             return True
             
         except Exception as e:
@@ -263,22 +295,38 @@ class MilvusAdapter(VectorDatabasePort):
                 # 컬렉션 로드 - 검색을 위해 메모리에 로드
                 collection = Collection(self._collection_name)
                 
-                # 인덱스가 없으면 생성
-                if not collection.has_index():
-                    logger.info("기존 컬렉션에 인덱스가 없습니다. 인덱스를 생성합니다...")
-                    index_params = {
+                # 인덱스 이름 정의 (일관성을 위해 _create_collection과 동일하게 사용)
+                dense_index_name = "dense_index"
+                sparse_index_name = "sparse_index"
+                
+                # Dense 인덱스가 없으면 생성
+                if not collection.has_index(index_name=dense_index_name):
+                    logger.info(f"기존 컬렉션에 Dense 인덱스 '{dense_index_name}'가 없습니다. 생성합니다...")
+                    index_params_dense = {
                         "metric_type": "L2",
                         "index_type": "IVF_FLAT",
                         "params": {"nlist": 128}
                     }
-                    collection.create_index(field_name="dense_vector", index_params=index_params)
-                    
+                    collection.create_index(field_name="dense_vector", index_params=index_params_dense, index_name=dense_index_name)
                     # 인덱스 생성 대기
-                    while not collection.has_index():
-                        logger.info("인덱스 생성 대기 중...")
+                    while not collection.has_index(index_name=dense_index_name):
+                        logger.info(f"Dense 인덱스 '{dense_index_name}' 생성 대기 중...")
                         sleep(1)
-                        
-                    logger.info("인덱스 생성 완료")
+                    logger.info(f"Dense 인덱스 '{dense_index_name}' 생성 완료")
+
+                # Sparse 인덱스가 없으면 생성
+                if not collection.has_index(index_name=sparse_index_name):
+                    logger.info(f"기존 컬렉션에 Sparse 인덱스 '{sparse_index_name}'가 없습니다. 생성합니다...")
+                    index_params_sparse = {
+                        "index_type": "SPARSE_INVERTED_INDEX",
+                        "metric_type": "IP"
+                    }
+                    collection.create_index(field_name="sparse_vector", index_params=index_params_sparse, index_name=sparse_index_name)
+                    # 인덱스 생성 대기
+                    while not collection.has_index(index_name=sparse_index_name):
+                        logger.info(f"Sparse 인덱스 '{sparse_index_name}' 생성 대기 중...")
+                        sleep(1)
+                    logger.info(f"Sparse 인덱스 '{sparse_index_name}' 생성 완료")
                 
                 # 컬렉션 로드 (필요한 경우)
                 try:
@@ -385,6 +433,15 @@ class MilvusAdapter(VectorDatabasePort):
                     "type": chunk_source  # 확인된 소스 타입 사용
                 }
                 
+                # 이미지 URI 및 링크 정보 처리
+                if 'image_uris' in metadata_copy:
+                    simplified_metadata['image_uris'] = metadata_copy['image_uris']
+                    logger.info(f"  이미지 URI 정보 {len(metadata_copy['image_uris'])}개 메타데이터에 추가됨")
+                
+                if 'image_links' in metadata_copy:
+                    simplified_metadata['image_links'] = metadata_copy['image_links']
+                    logger.info(f"  이미지 링크 정보 {len(metadata_copy['image_links'])}개 메타데이터에 추가됨")
+                
                 # 테이블 타입인 경우 추가 로깅
                 if chunk_source == 'table':
                     logger.info(f"  테이블 청크 {chunk_index} 인식 - 메타데이터에 테이블 타입으로 설정")
@@ -404,6 +461,20 @@ class MilvusAdapter(VectorDatabasePort):
                 
                 # 문서 ID 추출
                 document_id = metadata_copy.get('document_id', metadata_copy.get('filename', 'unknown_document'))
+                
+                # document_id 길이 확인 및 처리 (최대 64자로 제한)
+                if len(document_id) > 64:
+                    # 원본 document_id를 메타데이터에 저장
+                    if 'original_document_id' not in simplified_metadata:
+                        simplified_metadata['original_document_id'] = document_id
+                        # 메타데이터 다시 직렬화
+                        metadata_str = json.dumps(simplified_metadata, cls=CustomJSONEncoder)
+                    
+                    # 긴 document_id를 처리하는 방법 1: 자르기 (앞에서 60자 + 해시값 4자)
+                    import hashlib
+                    doc_hash = hashlib.md5(document_id.encode()).hexdigest()[:4]
+                    document_id = document_id[:60] + doc_hash
+                    logger.info(f"  문서 ID가 너무 깁니다. 잘라서 사용: '{document_id}' (원본 길이: {len(metadata_copy.get('document_id', ''))}자)")
                 
                 # 현재 시간
                 current_time = time.strftime('%Y-%m-%d %H:%M:%S')
@@ -430,7 +501,7 @@ class MilvusAdapter(VectorDatabasePort):
                 )
                 
                 if has_sparse_vector:
-                    # NumPy 구조를 JSON으로 직렬화하기 위해 표준 Python 타입으로 변환
+                    # NumPy 구조를 sparse_vector 형식으로 변환
                     if hasattr(sparse_vector_data, 'tolist'):
                         sparse_vector_dict = sparse_vector_data.tolist()
                     elif hasattr(sparse_vector_data, 'to_dict'):
@@ -438,36 +509,37 @@ class MilvusAdapter(VectorDatabasePort):
                     else:
                         sparse_vector_dict = sparse_vector_data
                         
+                    # 샘플 로깅
                     sparse_vector_sample = str(sparse_vector_dict)[:100] + "..." if len(str(sparse_vector_dict)) > 100 else str(sparse_vector_dict)
                     logger.info(f"  청크 {chunk_index}의 sparse_vector 샘플: {sparse_vector_sample}")
-                    record["sparse_vector"] = json.dumps(sparse_vector_dict, cls=CustomJSONEncoder)
+                    
+                    # Milvus SPARSE_FLOAT_VECTOR 타입은 {인덱스: 값} 형태의 딕셔너리를 직접 사용
+                    # 예제: {4: 0.003685884177684784, 6: 0.012936025857925415, ...}
+                    if isinstance(sparse_vector_dict, dict):
+                        # 기존 딕셔너리 형식 유지, 키가 문자열인 경우 정수로 변환
+                        cleaned_dict = {}
+                        for k, v in sparse_vector_dict.items():
+                            # 문자열 키를 정수로 변환
+                            if isinstance(k, str):
+                                try:
+                                    k = int(k)
+                                except ValueError:
+                                    continue  # 변환 실패하면 건너뜀
+                            
+                            # 값을 float으로 변환
+                            cleaned_dict[k] = float(v)
+                        
+                        record["sparse_vector"] = cleaned_dict  # 정제된 딕셔너리 직접 저장
+                    else:
+                        # 딕셔너리가 아닌 다른 형식이면 빈 딕셔너리 사용
+                        logger.warning(f"  청크 {chunk_index}의 sparse_vector 형식이 딕셔너리가 아닙니다. 빈 딕셔너리로 설정")
+                        record["sparse_vector"] = {}
+                    
                     record["sparse_model"] = "bge-m3-sparse"
                 else:
                     logger.warning(f"  청크 {chunk_index}에 sparse_vector가 없거나 비어 있습니다")
-                    record["sparse_vector"] = json.dumps({})
+                    record["sparse_vector"] = {}  # 빈 딕셔너리
                     record["sparse_model"] = "none"
-                
-                # colbert_vecs 처리 및 로깅
-                colbert_vecs_data = getattr(embedding, 'colbert_vecs', None)
-                # NumPy 배열을 직접 if 조건으로 사용할 때 발생하는 오류 방지
-                has_colbert_vecs = colbert_vecs_data is not None and len(colbert_vecs_data) > 0
-                
-                if has_colbert_vecs:
-                    # NumPy 배열을 JSON으로 직렬화하기 위해 표준 Python 타입으로 변환
-                    if hasattr(colbert_vecs_data, 'tolist'):
-                        colbert_vecs_list = colbert_vecs_data.tolist()
-                    else:
-                        colbert_vecs_list = colbert_vecs_data
-                        
-                    # 첫 몇 개 벡터만 로그에 출력
-                    colbert_sample = str(colbert_vecs_list[:2])[:100] + "..." if len(str(colbert_vecs_list[:2])) > 100 else str(colbert_vecs_list[:2])
-                    logger.info(f"  청크 {chunk_index}의 colbert_vecs 샘플 (토큰 수: {len(colbert_vecs_list)}): {colbert_sample}")
-                    record["colbert_vecs"] = json.dumps(colbert_vecs_list, cls=CustomJSONEncoder)
-                    record["colbert_model"] = "bge-m3-colbert"
-                else:
-                    logger.warning(f"  청크 {chunk_index}에 colbert_vecs가 없거나 비어 있습니다")
-                    record["colbert_vecs"] = json.dumps([])
-                    record["colbert_model"] = "none"
                 
                 # 나머지 필드 추가
                 record.update({

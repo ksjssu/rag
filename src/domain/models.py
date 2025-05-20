@@ -39,4 +39,3 @@ class EmbeddingVector:
     vector: List[float] # 임베딩 벡터 값 리스트 (dense vector)
     metadata: Dict[str, Any] = field(default_factory=dict) # 해당 임베딩이 파생된 청크 정보 등
     sparse_vector: Optional[Dict[int, float]] = None # BGE-M3의 스파스 벡터 (indices와 values 정보)
-    colbert_vecs: Optional[List[List[float]]] = None # BGE-M3의 ColBERT 벡터

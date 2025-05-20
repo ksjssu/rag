@@ -18,7 +18,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from docling.datamodel.pipeline_options import (
     PdfPipelineOptions,
-    #granite_picture_description - 픽처 디스크립션 모드
+    granite_picture_description
 )
 
 # config에서 설정 및 로거 가져오기
@@ -81,7 +81,9 @@ def create_app() -> FastAPI:
         do_table_structure=settings.DO_TABLE_STRUCTURE,  # 테이블 구조 추출 설정
         images_scale=settings.IMAGES_SCALE,  # 이미지 크기 조정
         generate_picture_images=settings.GENERATE_PICTURE_IMAGES  # 이미지 생성 설정
+        
     )
+    
     
     # 파이프라인 옵션 로깅 (이미지 설명 관련 부분 제거)
     logger.info("파이프라인 옵션: OCR/테이블/텍스트 추출만 활성화, 이미지 설명 완전 비활성화")
