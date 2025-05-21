@@ -12,6 +12,8 @@ from typing import Optional, List
 from pathlib import Path
 import sys
 import traceback
+from prometheus_fastapi_instrumentator import Instrumentator
+from contextlib import asynccontextmanager
 
 # Add the src directory to the Python path
 sys.path.append(str(Path(__file__).parent.parent))
@@ -34,34 +36,23 @@ from src.application.use_cases import IngestDocumentUseCase
 from src.adapters.secondary.docling_parser_adapter import DoclingParserAdapter
 from src.adapters.secondary.docling_chunker_adapter import DoclingChunkerAdapter
 from src.adapters.secondary.bge_m3_embedder_adapter import BgeM3EmbedderAdapter
-#from src.adapters.secondary.env_apikey_adapter import EnvApiKeyAdapter
-from src.adapters.secondary.milvus_adapter import MilvusAdapter, _milvus_library_available
+from src.adapters.secondary.milvus_adapter import MilvusAdapter
 
-# --- 더미 어댑터 클래스 정의 ---
-# DummyMilvusAdapter 클래스: Milvus 연결 실패 시 사용하는 백업 어댑터
-class DummyMilvusAdapter:
-    """Milvus 연결 실패 시 사용하는 더미 어댑터"""
-    
-    def __init__(self, *args, **kwargs):
-        logger.warning("Using DummyMilvusAdapter - Data will not be persisted")
-        
-    async def store_document(self, *args, **kwargs):
-        logger.warning("DummyMilvusAdapter: store_document called, but no action taken")
-        return {"status": "dummy", "message": "Data not stored (using dummy adapter)"}
 
-    async def search_documents(self, *args, **kwargs):
-        logger.warning("DummyMilvusAdapter: search_documents called, but no action taken")
-        return []
-
-    async def get_document(self, *args, **kwargs):
-        logger.warning("DummyMilvusAdapter: get_document called, but no action taken")
-        return None
-        
-    def save_document_data(self, chunks, embeddings):
-        logger.warning("DummyMilvusAdapter: save_document_data called, but no action taken")
-        return {"status": "dummy", "message": "Data not persisted in vector database"}
-
-# --- 하드코딩된 설정값 제거하고 settings에서 값을 가져오도록 수정 ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    애플리케이션 시작/종료 시 실행되는 이벤트 핸들러
+    """
+    # 시작 시점
+    logger.info("--- Application Startup ---")
+    try:
+        # 여기에 시작 시 필요한 초기화 코드
+        yield
+    finally:
+        # 종료 시점
+        logger.info("--- Application Shutdown ---")
+        # 여기에 종료 시 필요한 정리 코드
 
 def create_app() -> FastAPI:
     """
@@ -70,10 +61,6 @@ def create_app() -> FastAPI:
     이 함수가 헥사고날 아키텍처의 컴포지션 루트 역할을 합니다.
     """
     logger.info("--- Starting Application Assembly ---")
-
-    # API 키 관리 어댑터
-    #apikey_adapter = EnvApiKeyAdapter()
-    #logger.info("- Created EnvApiKeyAdapter instance.")
 
     # OCR 옵션 및 파이프라인 옵션 제거, 테이블/텍스트 추출만 활성화 (이미지 설명 완전 비활성화)
     pdf_options = PdfPipelineOptions(
@@ -129,33 +116,25 @@ def create_app() -> FastAPI:
         traceback.print_exc()
         raise RuntimeError(f"Application startup failed: {e}")
 
-    # Milvus 어댑터 생성 시도
-    persistence_adapter = None
+    # Milvus 어댑터 생성
     try:
-        # Milvus 라이브러리 사용 가능 여부 확인
-        if not _milvus_library_available:
-            logger.warning("pymilvus 라이브러리를 사용할 수 없습니다. 더미 어댑터를 사용합니다.")
-            persistence_adapter = DummyMilvusAdapter()
-            logger.info("- Created DummyMilvusAdapter (pymilvus library not available).")
-        else:
-            # 인증 정보 구성
-            token = None
-            if settings.MILVUS_USER and settings.MILVUS_PASSWORD:
-                token = f"{settings.MILVUS_USER}:{settings.MILVUS_PASSWORD}"
-                
-            # MilvusAdapter 인스턴스 생성 시도
-            persistence_adapter = MilvusAdapter(
-                host=settings.MILVUS_HOST,
-                port=settings.MILVUS_PORT,
-                collection_name=settings.MILVUS_COLLECTION,
-                token=token
-            )
-            logger.info("- Created MilvusAdapter instance and successfully connected.")
+        # 인증 정보 구성
+        token = None
+        if settings.MILVUS_USER and settings.MILVUS_PASSWORD:
+            token = f"{settings.MILVUS_USER}:{settings.MILVUS_PASSWORD}"
+            
+        # MilvusAdapter 인스턴스 생성
+        persistence_adapter = MilvusAdapter(
+            host=settings.MILVUS_HOST,
+            port=settings.MILVUS_PORT,
+            collection_name=settings.MILVUS_COLLECTION,
+            token=token
+        )
+        logger.info("- Created MilvusAdapter instance and successfully connected.")
     except Exception as e:
-        logger.warning(f"--- WARNING: Failed to initialize MilvusAdapter. Using dummy adapter instead. --- Error: {e}")
-        # 실패 시 더미 어댑터 사용
-        persistence_adapter = DummyMilvusAdapter()
-        logger.info("- Created DummyMilvusAdapter as fallback.")
+        logger.error(f"Failed to initialize MilvusAdapter: {e}")
+        traceback.print_exc()
+        raise RuntimeError(f"Application startup failed: {e}")
 
     # 유스케이스 인스턴스 생성
     try:
@@ -164,7 +143,6 @@ def create_app() -> FastAPI:
             chunking_port=chunker_adapter,
             embedding_port=embedder_adapter,
             persistence_port=persistence_adapter,
-        #    api_key_port=apikey_adapter
         )
         logger.info("- Created IngestDocumentUseCase instance and injected dependencies.")
     except Exception as e:
@@ -179,8 +157,15 @@ def create_app() -> FastAPI:
         version="0.1.0",
         docs_url="/docs",
         redoc_url="/redoc",
+        lifespan=lifespan  # lifespan 추가
     )
     logger.info("- Created FastAPI application instance.")
+
+    # Prometheus Instrumentator 설정
+    instrumentator = Instrumentator()
+    instrumentator.instrument(app)
+    app.instrumentator = instrumentator
+    logger.info("- Configured Prometheus Instrumentator.")
 
     # API 라우터 설정
     api_router = setup_api_routes(input_port=ingest_use_case_instance)
@@ -239,14 +224,5 @@ except Exception as e:
         return {"status": "unhealthy", "message": str(e)}
 
 # 개발 모드에서 직접 실행 시
-if __name__ == "__main__":
-    # 파일 변경 감시 설정을 조정하여 메모리 오류 방지
-    uvicorn.run(
-        app, 
-        host=settings.API_HOST, 
-        port=settings.API_PORT, 
-        use_colors=True,
-        limit_max_requests=settings.API_LIMIT_MAX_REQUESTS,  # 메모리 누수 방지를 위한 최대 요청 수 제한
-        reload=settings.API_RELOAD  # 혹은 reload_dirs를 직접 지정하여 감시할 디렉토리 제한
-    )
+
 

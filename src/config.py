@@ -30,12 +30,12 @@ class Settings(BaseSettings):
     # Milvus 설정
     MILVUS_HOST: str = "10.10.30.80"
     MILVUS_PORT: int = 30953
-    MILVUS_COLLECTION: str = "test_250520_normal"
+    MILVUS_COLLECTION: str = "test_0521"
     MILVUS_USER: Optional[str] = "root"
     MILVUS_PASSWORD: Optional[str] = "smr0701!"
     
     # Docling 설정
-    DOCLING_ALLOWED_FORMATS: str = "pdf,docx,xlsx,pptx,jpg,png"
+    DOCLING_ALLOWED_FORMATS: str = "pdf,docx,xlsx,pptx,jpg,png,csv"
     
     # 임베딩 모델 설정
     EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"

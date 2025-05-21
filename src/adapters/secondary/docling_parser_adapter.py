@@ -19,213 +19,41 @@ import shutil
 import inspect
 import time
 
+
 # config에서 로거 가져오기
 from src.config import logger, settings
+from src.domain.models import RawDocument
 
 # 기존 로깅 설정 제거
 # logging.basicConfig(level=logging.DEBUG)
 # logger.setLevel(logging.DEBUG)
 
 # --- Docling 라이브러리 임포트 ---
-# src/adapters/secondary/docling_parser_adapter.py
+from docling.document_converter import DocumentConverter, FormatOption, PdfFormatOption
+from docling.datamodel.base_models import DocumentStream, ConversionStatus, InputFormat
+from docling.datamodel.document import ConversionResult
+from docling_core.types.doc import DocItemLabel, ImageRefMode
+from docling.datamodel.pipeline_options import (
+    PipelineOptions, PdfPipelineOptions, EasyOcrOptions, 
+    TableStructureOptions, AcceleratorOptions, TableFormerMode, 
+    granite_picture_description, PictureDescriptionApiOptions
+)
+from ports.output_ports import DocumentParsingPort
+from docling.exceptions import ConversionError as DoclingConversionError
 
-# --- Docling 라이브러리 임포트 ---
-# 제공된 디렉토리 목록에 기반하여 정확한 임포트 경로로 수정합니다.
-# 최상위 패키지는 'docling' 입니다.
+
 try:
-    # Docling 파싱을 위한 핵심 클래스 임포트
-    # from docling_core.document_converter import DocumentConverter # 이전 시도 (실패)
-    from docling.document_converter import DocumentConverter, FormatOption, PdfFormatOption # <-- 정확한 경로: docling/document_converter.py
-
-    # from docling_core.datamodel.base_models import DocumentStream, ConversionStatus, InputFormat # 이전 시도 (실패)
-    from docling.datamodel.base_models import DocumentStream, ConversionStatus, InputFormat # <-- 정확한 경로: docling/datamodel/base_models.py
-
-    # from docling_core.datamodel.document import ConversionResult # 이전 시도 (실패)
-    from docling.datamodel.document import ConversionResult # <-- 정확한 경로: docling/datamodel/document.py
-    from docling_core.types.doc import DocItemLabel, ImageRefMode
-    # --- 파이프라인 옵션 임포트 ---
-    # from docling_core.datamodel.pipeline_options import PipelineOptions, PdfPipelineOptions # 이전 시도 (실패)
-    from docling.datamodel.pipeline_options import (
-        PipelineOptions, PdfPipelineOptions, EasyOcrOptions, 
-        TableStructureOptions, AcceleratorOptions, TableFormerMode, 
-        granite_picture_description, PictureDescriptionApiOptions
-    ) # <-- 정확한 경로: docling/datamodel/pipeline_options.py
-
-    # 필요한 다른 Docling 모듈/클래스 임포트 (예외 클래스 등)
-    # from docling_core.exceptions import ConversionError as DoclingConversionError # 이전 시도 (실패)
-    from docling.exceptions import ConversionError as DoclingConversionError # <-- 정확한 경로: docling/exceptions.py
-
-    # Docling 자체 유틸리티 함수 임포트 (InputFormat 추정 등에 사용될 수 있음)
-    # 예: from docling.utils.utils import guess_format_from_extension # <-- 정확한 경로: docling/utils/utils.py
-
+    import docling
     _docling_available = True
-    logger.info("Docling core libraries imported successfully.")
-except ImportError as e: # 임포트 실패 시 발생하는 예외 메시지를 출력하도록 수정
-    logger.warning(f"Warning: Docling library import failed. Import error: {e}") # <-- 실제 임포트 오류 메시지 출력
-    logger.warning("DoclingParserAdapter will use fallback decoding.")
+except ImportError:
     _docling_available = False
-    # --- Docling 클래스가 없을 경우 에러 방지를 위한 더미 클래스 정의 ---
-    # (이전 더미 클래스 정의는 그대로 유지되어야 합니다.)
-    logger.info("   Using dummy Docling classes.")
-    # Dummy 클래스 정의들...
+    logger.warning("Docling 라이브러리를 찾을 수 없습니다.")
 
 
 # --- 어댑터 특정 예외 정의 ---
-# ... (ParsingError 정의) ...
-
-# ... (나머지 DoclingParserAdapter 클래스 코드 계속) ...
-
-    # (Dummy DocumentConverter, Dummy DocumentStream 등 다른 더미 클래스 정의는 그대로 유지)
-
-    # ★★★ 시작: 기존 더미 InputFormat 및 ConversionStatus 클래스 정의 전체와 이 블록 내용으로 교체 ★★★
-
-    # Helper dummy class for InputFormat and ConversionStatus members (to simulate enum-like objects)
-    class _DummyInputFormatMember:
-        def __init__(self, name):
-            self.name = name
-        # Allow comparison with actual InputFormat/Status members or strings like 'PDF' or 'SUCCESS'
-        def __eq__(self, other):
-             if isinstance(other, _DummyInputFormatMember): return self.name == other.name
-             # Allow comparison with uppercase strings
-             if isinstance(other, str): return self.name == other.upper()
-             # If comparing with actual Docling enum members, they might have a .name property
-             if hasattr(other, 'name') and isinstance(getattr(other, 'name'), str): return self.name == getattr(other, 'name').upper()
-             return False
-        def __hash__(self): return hash(self.name) # Hash based on the name string
-        def __str__(self): return self.name
-        def __repr__(self): return f"<DummyStatusOrFormatMember:{self.name}>"
-
-        # Needed for `if status in {SUCCESS, ...}` checks
-        def __iter__(self): yield self # Allow iteration (e.g., when in a set)
-        def __contains__(self, item): return item == self # Allow `in` operator check
-
-
-    # Revised Dummy InputFormat (using helper class and simpler __members__)
-    class InputFormat(str, Enum):
-        """A document format supported by document backend parsers."""
-        DOCX = "docx"
-        PPTX = "pptx"
-        HTML = "html"
-        IMAGE = "image"
-        PDF = "pdf"
-        ASCIIDOC = "asciidoc"
-        MD = "md"
-        CSV = "csv"
-        XLSX = "xlsx"
-        XML_USPTO = "xml_uspto"
-        XML_JATS = "xml_jats"
-        JSON_DOCLING = "json_docling"
-
-        # __members__ 딕셔너리 업데이트 (UNKNOWN 제거)
-        __members__ = {
-            'DOCX': DOCX,
-            'PPTX': PPTX,
-            'HTML': HTML,
-            'IMAGE': IMAGE,
-            'PDF': PDF,
-            'ASCIIDOC': ASCIIDOC,
-            'MD': MD,
-            'CSV': CSV,
-            'XLSX': XLSX,
-            'XML_USPTO': XML_USPTO,
-            'XML_JATS': XML_JATS,
-            'JSON_DOCLING': JSON_DOCLING
-        }
-
-        @classmethod
-        def from_extension(cls, ext):
-             ext_upper = ext.lstrip('.').upper()
-             # Look up directly in the __members__ dictionary using the uppercase extension
-             if ext_upper in cls.__members__: return cls.__members__[ext_upper]
-             # Special mapping based on __members__ values
-             # Access members via __members__ dictionary lookup
-             if ext_upper in ['JPG', 'JPEG', 'PNG', 'TIFF'] and 'IMAGE' in cls.__members__: return cls.__members__['IMAGE']
-             return cls.UNKNOWN if 'UNKNOWN' in cls.__members__ else None # Return dummy object value
-
-        # Add __getitem__ to allow dictionary-style access if needed elsewhere (e.g., InputFormat['PDF'])
-        @classmethod
-        def __getitem__(cls, name):
-            name_upper = name.upper() # Allow case-insensitive access
-            if name_upper in cls.__members__: return cls.__members__[name_upper]
-            raise KeyError(f"'{name}' is not a valid dummy InputFormat member.")
-
-
-    # Revised Dummy ConversionStatus enum (using helper class and simpler __members__)
-    class ConversionStatus:
-        SUCCESS = _DummyInputFormatMember('SUCCESS')
-        PARTIAL_SUCCESS = _DummyInputFormatMember('PARTIAL_SUCCESS')
-        FAILURE = _DummyInputFormatMember('FAILURE')
-        SKIPPED = _DummyInputFormatMember('SKIPPED')
-        # Define __members__ dictionary mapping *string names* to the member objects
-        __members__ = {
-            'SUCCESS': SUCCESS, 'PARTIAL_SUCCESS': PARTIAL_SUCCESS,
-            'FAILURE': FAILURE, 'SKIPPED': SKIPPED
-        }
-        # Add __getitem__ for dictionary-style access if needed elsewhere
-        @classmethod
-        def __getitem__(cls, name):
-            name_upper = name.upper()
-            if name_upper in cls.__members__: return cls.__members__[name_upper]
-            raise KeyError(f"'{name}' is not a valid dummy ConversionStatus member.")
-
-        # Needed for `if status in {SUCCESS, ...}` checks (handled by _DummyInputFormatMember)
-        # @property
-        # def name(self): return self._name # Handled by _DummyInputFormatMember.name
-
-
-    # Dummy ConversionResult
-    class ConversionResult:
-         def __init__(self, status, document=None, errors=None, warnings=None):
-              self.status = status
-              self.document = document
-              self.errors = errors or []
-              self.warnings = warnings or []
-         @property
-         def status(self): return self._status
-         @status.setter
-         def status(self, value): self._status = value
-         @property
-         def document(self): return self._document
-         @document.setter
-         def document(self, value): self._document = value
-
-
-    # Dummy PipelineOptions and PdfPipelineOptions
-    class PipelineOptions: pass
-    class PdfPipelineOptions: pass
-
-    # Dummy DoclingConversionError (needs to inherit from Exception)
-    class DoclingConversionError(Exception): pass
-
-    # Dummy guess_format_from_extension function if it's called directly (not used in current parse method)
-    # def guess_format_from_extension(filename): return InputFormat.AUTODETECT # Simplified dummy
-
-
-    # ★★★ 끝: 기존 더미 InputFormat 및 ConversionStatus 클래스 정의 전체와 이 블록 내용으로 교체 ★★★
-
-
-# --- 어댑터 특정 예외 정의 ---
-# 파싱 과정에서 발생하는 오류를 나타내기 위한 어댑터 레벨의 예외
 class ParsingError(Exception):
     """Represents an error during the document parsing process."""
     pass
-
-# ... (나머지 DoclingParserAdapter 클래스 코드 계속) ...
-
-
-import os
-from ports.output_ports import DocumentParsingPort # 구현할 포트 임포트
-from domain.models import RawDocument, ParsedDocument # 입/출력 도메인 모델 임포트
-from typing import Dict, Any, Optional, List, Union # Union 임포트
-from pathlib import Path # 파일 확장자 추출에 사용
-
-# src/adapters/secondary/docling_parser_adapter.py 파일 상단에 추가
-DOCLING_ALLOWED_FORMATS = [
-    "pdf", "docx", "xlsx", "pptx",
-    "html", "md", "csv",
-    "jpg", "jpeg", "png", "tif", "tiff", "bmp",
-    "adoc", "xml", "json"
-]
 
 @dataclass
 class ParsedDocument:
@@ -267,6 +95,8 @@ class ParsedDocument:
     code_enrichments: List[Dict[str, Any]] = field(default_factory=list)  # 코드 보강 정보
     formula_enrichments: List[Dict[str, Any]] = field(default_factory=list)  # 수식 보강 정보
 
+
+
 class DoclingParserAdapter(DocumentParsingPort):
     """
     Docling 라이브러리를 사용하여 문서 파싱 기능을 제공하는 어댑터입니다.
@@ -275,32 +105,28 @@ class DoclingParserAdapter(DocumentParsingPort):
     def __init__(
         self,
         allowed_formats: Optional[List[str]] = None,
-        use_gpt_picture_description: bool = True,  # GPT 모델 사용 여부 플래그
-        images_save_dir: Optional[str] = None,  # 이미지 저장 디렉토리 (새로 추가)
-        image_resolution_scale: float = 2.0,  # 이미지 해상도 스케일 (새로 추가)
+        use_gpt_picture_description: bool = False,
+        images_save_dir: Optional[str] = None,
+        image_resolution_scale: float = 2.0,
     ):
         self._is_initialized_successfully = False
         self._converter = None
         self._allowed_docling_formats = None
-        self._image_resolution_scale = image_resolution_scale  # 이미지 해상도 스케일 저장
+        self._image_resolution_scale = image_resolution_scale
         
-        # 이미지 저장 디렉토리 설정 (기본값은 설정 파일 또는 'images' 디렉토리)
+        # 이미지 저장 디렉토리 설정
         self._images_save_dir = images_save_dir or getattr(settings, 'IMAGES_SAVE_DIR', 'images')
-        
-        # 이미지 저장 디렉토리가 없으면 생성
         os.makedirs(self._images_save_dir, exist_ok=True)
         logger.info(f"DoclingParserAdapter: 이미지 저장 디렉토리 설정: {self._images_save_dir}")
 
         # 1. 파이프라인 옵션 생성
         pipeline_options = PdfPipelineOptions()
         pipeline_options.do_picture_description = True
-        pipeline_options.images_scale = self._image_resolution_scale  # 사용자 설정 스케일 사용
+        pipeline_options.images_scale = self._image_resolution_scale
         pipeline_options.generate_page_images = True
         pipeline_options.generate_picture_images = True
-        pipeline_options.enable_remote_services = False  # 외부 서비스 연결 비활성화
-        
-        # OCR 비활성화 설정 추가
-        pipeline_options.do_ocr = False  # OCR 비활성화
+        pipeline_options.enable_remote_services = False
+        pipeline_options.do_ocr = False
         logger.info("DoclingParserAdapter: OCR 기능이 비활성화되었습니다.")
         
         # 기본 내장 모델 사용 (OpenAI API 대신)
@@ -312,13 +138,12 @@ class DoclingParserAdapter(DocumentParsingPort):
             pipeline_options.picture_description_options = granite_picture_description
                 # 캡션 커스텀 프롬프트 설정
             pipeline_options.picture_description_options.prompt = (
-                    "이미지를 세 문장으로 상세히 설명하세요. 이미지의 주요 요소, 내용, 그리고 의미를 명확하게 기술해 주세요."
-                )
+                "이미지를 세 문장으로 상세히 설명하세요. 이미지의 주요 요소, 내용, 그리고 의미를 명확하게 기술해 주세요."
+            )
             logger.info("DoclingParserAdapter: granite_picture_description 모델 설정됨")
             logger.info(f"캡션 프롬프트: {pipeline_options.picture_description_options.prompt}")
         except Exception as e:
             logger.warning(f"DoclingParserAdapter: PictureDescriptionApiOptions 생성 실패: {e}")
-            # fallback: picture_description_options 설정 제거 (PdfPipelineOptions 기본값 사용)
             if hasattr(pipeline_options, 'picture_description_options'):
                 del pipeline_options.picture_description_options
             logger.info("DoclingParserAdapter: picture_description_options 설정 제거됨")
@@ -458,11 +283,7 @@ class DoclingParserAdapter(DocumentParsingPort):
             logger.warning("DoclingParserAdapter: Empty document content received")
             return ParsedDocument(content="", metadata=raw_document.metadata)
 
-        if not _docling_available or not self._converter:
-            logger.info("[DEBUG] Docling 사용 불가 - 폴백 사용")
-            return ParsedDocument(content=raw_document.content, metadata=raw_document.metadata)
-        else:
-            logger.info("[DEBUG] Docling 사용 가능 - 변환 시도")
+
 
         try:
             # 입력 형식 확인 (수정된 부분)
