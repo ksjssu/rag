@@ -13,6 +13,10 @@ dependencies = [
     "transformers>=4.51.3",
 ]
 
+# src 디렉토리를 패키지로 인식하도록 설정 추가
+[tool.setuptools]
+package-dir = {"" = "src"}
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.2.0",
@@ -25,7 +29,7 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = ["src"]  # "." 대신 "src"로 변경
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 

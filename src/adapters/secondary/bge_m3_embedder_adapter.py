@@ -98,7 +98,7 @@ class EmbeddingError(Exception):
 import random # 모킹용
 from typing import List, Dict, Any, Optional # Optional 임포트
 
-from ports.output_ports import EmbeddingGenerationPort, ApiKeyManagementPort # 구현할 포트 및 의존할 수 있는 포트 임포트
+from ports.output_ports import EmbeddingGenerationPort #, ApiKeyManagementPort # 구현할 포트 및 의존할 수 있는 포트 임포트
 from domain.models import DocumentChunk, EmbeddingVector # 입/출력 도메인 모델 임포트
 
 

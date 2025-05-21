@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # 도메인 모델 임포트 (domain/models.py 에 정의될 모델)
 # RawDocument는 외부 입력을 애플리케이션 모델로 변환할 때 사용됩니다.
 # DocumentChunk는 유스케이스로부터 반환받아 외부에 제공할 때 사용됩니다.
-from domain.models import RawDocument, DocumentChunk
+from src.domain.models import RawDocument, DocumentChunk
 
 # 입력 포트 임포트 (애플리케이션 계층의 유스케이스가 이 포트를 구현합니다)
 # 프라이머리 어댑터는 이 포트를 통해 애플리케이션 코어와 통신합니다.

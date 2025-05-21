@@ -1,4 +1,4 @@
-# src/main.py
+# src/main.py -> main.py
 
 # .env 파일에서 환경 변수를 로드합니다.
 from dotenv import load_dotenv
@@ -15,8 +15,8 @@ import traceback
 from prometheus_fastapi_instrumentator import Instrumentator
 from contextlib import asynccontextmanager
 
-# Add the src directory to the Python path
-sys.path.append(str(Path(__file__).parent.parent))
+# src 디렉토리를 Python 경로에 추가
+sys.path.append(str(Path(__file__).parent / "src"))
 
 from docling.datamodel.pipeline_options import (
     PdfPipelineOptions,
