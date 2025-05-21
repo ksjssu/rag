@@ -105,7 +105,7 @@ def get_sparse_vector_for_search(query_text):
     """
     try:
         print(f"\n직접 생성 방식으로 '{query_text}'의 스파스 벡터 생성 중...")
-        tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-m3", token="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")
+        tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-m3", token="")
         inputs = tokenizer(query_text, return_tensors="pt")
         
         # input_ids를 기반으로 스파스 벡터 생성
